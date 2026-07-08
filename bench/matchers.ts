@@ -1,0 +1,74 @@
+import { compileFindRouteRules } from "../src/compiler.ts";
+import { createMatcherFromFind, createRouteRulesMatcher } from "../src/match.ts";
+import type { FindRouteRules, RouteRulesMatcher } from "../src/match.ts";
+import { normalizeRouteRules } from "../src/normalize.ts";
+import type { RouteRuleConfig } from "../src/types.ts";
+import { ruleHandlers } from "../src/rules/index.ts";
+import { RULES } from "./fixture.ts";
+
+export interface BenchVariant {
+  name: string;
+  matcher: RouteRulesMatcher;
+}
+
+// Evaluate `compileFindRouteRules` output into a live `FindRouteRules` by
+// binding every registry handler as its `<ns>$<name>` local (a superset of what
+// the generated code references — unused params are harmless). This is the exact
+// codegen a consumer of `h3-rules/compiler` runs.
+function evalCompiledFind(code: string): FindRouteRules {
+  // eslint-disable-next-line no-new-func
+  return new Function(
+    ...Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`),
+    `return (${code});`,
+  )(...Object.values(ruleHandlers)) as FindRouteRules;
+}
+
+/**
+ * Build all matcher variants over the shared fixture:
+ * {runtime, compiled} × {plain, preMerge} × {plain, memoize}.
+ *
+ * Compiled variants evaluate `compileFindRouteRules` output (same as
+ * test/compiler.test.ts) and go through `createMatcherFromFind` — the exact
+ * code path a consumer of `h3-rules/compiler` codegen runs.
+ *
+ * Call once per bench group: memoize variants carry per-instance caches.
+ */
+export function createBenchMatchers(): BenchVariant[] {
+  const normalized = normalizeRouteRules(RULES);
+  const variants: BenchVariant[] = [];
+  for (const preMerge of [false, true]) {
+    const code = compileFindRouteRules(normalized, { preMerge });
+    for (const memoize of [false, true]) {
+      const suffix = (preMerge ? " +preMerge" : "") + (memoize ? " +memoize" : "");
+      variants.push(
+        {
+          name: `runtime${suffix}`,
+          matcher: createRouteRulesMatcher(normalized, { preMerge, memoize }),
+        },
+        {
+          name: `compiled${suffix}`,
+          matcher: createMatcherFromFind(evalCompiledFind(code), { memoize }),
+        },
+      );
+    }
+  }
+  return variants;
+}
+
+/**
+ * Build the two shipping matcher variants (runtime router vs compiled codegen)
+ * for a single per-rule rule set — the pair the per-rule RPS groups compare so
+ * each built-in rule's match cost stands on its own (no memoize/preMerge, which
+ * would flatten every rule to a map lookup / most-specific-layer and hide the
+ * per-handler difference). Call once per bench group.
+ */
+export function createRuleBenchMatchers(rules: Record<string, RouteRuleConfig>): BenchVariant[] {
+  const normalized = normalizeRouteRules(rules);
+  return [
+    { name: "runtime", matcher: createRouteRulesMatcher(normalized) },
+    {
+      name: "compiled",
+      matcher: createMatcherFromFind(evalCompiledFind(compileFindRouteRules(normalized))),
+    },
+  ];
+}

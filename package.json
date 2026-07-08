@@ -1,0 +1,62 @@
+{
+  "name": "h3-rules",
+  "version": "0.0.0",
+  "description": "Declarative route rules (redirect, proxy, headers, cache, basic auth, CORS) for H3 v2 — runtime-agnostic, extracted from Nitro.",
+  "keywords": [
+    "cache",
+    "h3",
+    "nitro",
+    "proxy",
+    "redirect",
+    "route-rules",
+    "routing"
+  ],
+  "license": "MIT",
+  "repository": "h3js/h3-rules",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./compiler": "./dist/compiler.mjs"
+  },
+  "scripts": {
+    "bench": "node --expose-gc bench/match.mjs",
+    "bench:size": "node bench/bundle-size.mjs",
+    "build": "obuild",
+    "dev": "vitest dev",
+    "fmt": "automd && oxlint . --fix && oxfmt .",
+    "lint": "oxlint . && oxfmt --check .",
+    "prepack": "pnpm build",
+    "release": "pnpm test && pnpm build && changelogen --release && npm publish && git push --follow-tags",
+    "test": "pnpm lint && pnpm typecheck && vitest run --coverage",
+    "typecheck": "tsgo --noEmit --skipLibCheck"
+  },
+  "dependencies": {
+    "ocache": "^0.1.5",
+    "rou3": "^0.9.1",
+    "ufo": "^1.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@typescript/native-preview": "latest",
+    "@vitest/coverage-v8": "latest",
+    "automd": "latest",
+    "changelogen": "latest",
+    "esbuild": "^0.28.1",
+    "h3": "^2.0.1-rc.23",
+    "mitata": "^1.0.34",
+    "obuild": "latest",
+    "oxfmt": "latest",
+    "oxlint": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  },
+  "peerDependencies": {
+    "h3": "^2.0.1-rc.23"
+  },
+  "packageManager": "pnpm@11.10.0"
+}
