@@ -75,6 +75,12 @@ export function normalizeRouteRules(
         cache.maxAge = routeConfig.swr;
       }
       routeRules.cache = cache;
+    } else if (routeConfig.swr === false && routeConfig.cache === undefined) {
+      // Bare `swr: false` (no explicit `cache`) is a cache reset marker — same
+      // as `cache: false` — so it disables an inherited `cache` rule at merge
+      // time. `swr: 0` is a real value (handled above), not a reset; an explicit
+      // `cache` alongside `swr: false` wins and is handled by the block below.
+      routeRules.cache = false;
     }
 
     // `false` reset markers (delete an inherited rule at runtime merge)

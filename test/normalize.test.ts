@@ -19,16 +19,23 @@ describe("normalizeRouteRules - swr", () => {
     expect(rules["/api/**"]!.cache).toMatchObject({ swr: true, maxAge: 0 });
   });
 
-  it("swr: false does not enable SWR", () => {
+  it("swr: false is a cache reset marker (disables an inherited cache rule)", () => {
     const rules = normalizeRouteRules({ "/api/**": { swr: false } });
-    expect(rules["/api/**"]!.cache).toBeUndefined();
+    expect(rules["/api/**"]!.cache).toBe(false);
+  });
+
+  it("swr: false yields to an explicit cache object on the same rule", () => {
+    const rules = normalizeRouteRules({
+      "/api/**": { swr: false, cache: { maxAge: 60 } },
+    });
+    expect(rules["/api/**"]!.cache).toEqual({ maxAge: 60 });
   });
 
   it("swr: 0 and swr: false are not equivalent", () => {
     const withZero = normalizeRouteRules({ "/api/**": { swr: 0 } });
     const withFalse = normalizeRouteRules({ "/api/**": { swr: false } });
-    expect(withZero["/api/**"]!.cache).toBeTruthy();
-    expect(withFalse["/api/**"]!.cache).toBeUndefined();
+    expect(withZero["/api/**"]!.cache).toMatchObject({ swr: true, maxAge: 0 });
+    expect(withFalse["/api/**"]!.cache).toBe(false);
   });
 
   it("swr combines with an explicit cache object without mutating the input", () => {

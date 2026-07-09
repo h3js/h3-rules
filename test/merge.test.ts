@@ -95,6 +95,20 @@ describe("merge algorithm", () => {
     });
   });
 
+  it("bare `swr: false` disables an inherited swr cache rule", () => {
+    // A broad rule expands `swr` -> `cache`; a more specific rule sets bare
+    // `swr: false` WITHOUT an explicit `cache: false`. The reset must still fire.
+    const match = matcher({
+      "/**": { swr: 3600 },
+      "/api/test": { swr: false },
+    });
+    expect(match("GET", "/api/other").routeRules.cache!.options).toMatchObject({
+      swr: true,
+      maxAge: 3600,
+    });
+    expect(match("GET", "/api/test").routeRules.cache).toBeUndefined();
+  });
+
   it("`false` on the most specific layer yields no middleware for that rule", () => {
     const match = matcher({
       "/rules/basic-auth/**": { basicAuth: { username: "admin", password: "secret" } },
