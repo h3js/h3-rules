@@ -123,7 +123,7 @@ The generated module imports **only the rule handlers the rule set uses** — ea
 
 ### Extending rule types
 
-`RouteRuleConfig` and `RouteRules` are open interfaces designed for module augmentation. Consumers re-add their own keys with full typing:
+`RouteRuleConfig` (the config you author) is a **closed** interface — unknown keys are compile errors, so a typo like `redirct` is caught at build time. To add custom or data-only rules, declare them via module augmentation. Augment `RouteRuleConfig` for the config input, and `RouteRules` (which stays open) so the key is typed on the normalized/matched result too:
 
 ```ts
 declare module "h3-rules" {
@@ -132,13 +132,18 @@ declare module "h3-rules" {
     isr?: number | boolean;
     /** Add this route to the prerender queue. */
     prerender?: boolean;
+    /** A data-only rule with no runtime handler. */
+    audience?: "public" | "internal";
   }
   interface RouteRules {
     isr?: number | boolean;
     prerender?: boolean;
+    audience?: "public" | "internal";
   }
 }
 ```
+
+Data-only rules (no matching handler) still flow through normalization and merge untouched at runtime — augmentation only re-opens the typing.
 
 ## Development
 

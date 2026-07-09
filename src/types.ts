@@ -7,9 +7,13 @@ export type HTTPStatus = number;
 /**
  * Route rule options as authored by the user (input to {@link normalizeRouteRules}).
  *
- * This is an **open interface** designed for module augmentation: consumers
- * (e.g. Nitro) re-add their own keys (`isr`, `prerender`, `static`, …) with full
- * typing via interface merging. See the README "Extending rule types" section.
+ * This is a **closed interface**: only the keys declared here type-check, so a
+ * typo like `redirct` or `header` is a compile error. Custom / data-only rules
+ * must be declared via module augmentation — the same mechanism consumers
+ * (e.g. Nitro) use to re-add their own keys (`isr`, `prerender`, `static`, …)
+ * with full typing via interface merging. Data-only keys still pass through
+ * normalization untouched at runtime; augmentation only re-opens the *typing*.
+ * See the README "Extending rule types" section.
  *
  * @example
  * ```ts
@@ -69,15 +73,16 @@ export interface RouteRuleConfig {
    * - `false` — do not enable SWR.
    */
   swr?: boolean | number;
-
-  /** Data-only / custom rules pass through normalization untouched. */
-  [key: string]: unknown;
 }
 
 /**
  * Normalized route rules used at runtime after shortcut resolution.
  *
- * Also an **open interface** for module augmentation.
+ * Unlike {@link RouteRuleConfig}, this stays an **open interface** (retains its
+ * `[key: string]: unknown` index signature): the matcher/merge runtime handles
+ * arbitrary rule names, and a matched result (`event.context.routeRules`) may
+ * carry augmented keys. Augment it alongside `RouteRuleConfig` to type custom
+ * rules end to end (see the README "Extending rule types" section).
  */
 export interface RouteRules {
   headers?: Record<string, string>;
