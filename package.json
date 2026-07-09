@@ -36,7 +36,7 @@
     "typecheck": "tsgo --noEmit --skipLibCheck"
   },
   "dependencies": {
-    "ocache": "^0.1.5",
+    "ocache": "^0.2.0",
     "rou3": "^0.9.1",
     "ufo": "^1.6.4"
   },
