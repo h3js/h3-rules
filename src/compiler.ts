@@ -42,8 +42,12 @@ export interface CompileRouteRulesOptions {
   /**
    * Pre-merge each pattern's subsumption chain at compile time so per-request
    * resolution takes only the most specific matched layer instead of merging
-   * all layers. Exact — but requires a **chain-clean** rule set: throws at
-   * compile time if two patterns partially overlap or cannot be analyzed.
+   * all layers. Exact — but requires a **chain-clean** rule set. Pre-merge is a
+   * throughput optimization, not a correctness requirement, so — unlike the
+   * runtime matcher, which throws — the compiler is **fail-safe**: if the rule
+   * set is not chain-clean (two patterns partially overlap or cannot be
+   * analyzed), it emits a `console.warn` and falls back to plain compilation
+   * instead of failing the build.
    */
   preMerge?: boolean;
 }
@@ -69,8 +73,11 @@ export function compileFindRouteRules(
   // Build the exact same router as the runtime matcher (including method-scoped
   // precedence combination and optional chain pre-merge) so compiled and
   // runtime matchers behave identically. Handlers are attached in generated
-  // code by name, not here.
-  const router = createRulesRouter(rules, {}, opts.baseURL, opts.preMerge);
+  // code by name, not here. preMerge is resolved fail-safe: a rule set that is
+  // not chain-clean falls back to plain compilation (see the option docs) —
+  // resolved identically in compileHandlersImport so imports and references
+  // stay in sync.
+  const router = createRulesRouter(rules, {}, opts.baseURL, resolveEffectivePreMerge(rules, opts));
   const runtimeRules = opts.runtimeRules || RUNTIME_RULE_NAMES;
   const ns = opts.handlersImportName || "__ruleHandlers__";
   assertHandlerBinding(ns, "handlersImportName");
@@ -93,6 +100,7 @@ export function compileFindRouteRules(
 function usedRuleHandlerNames(
   rules: Record<string, RouteRules>,
   opts: CompileRouteRulesOptions = {},
+  preMerge = false,
 ): string[] {
   const runtimeRules = opts.runtimeRules || RUNTIME_RULE_NAMES;
   const used = new Set<string>();
@@ -100,9 +108,11 @@ function usedRuleHandlerNames(
     for (const [name, options] of Object.entries(rules[key]!)) {
       // preMerge resolves `false` resets at compile time, so they never
       // reference a handler in the output; plain mode serializes them with one.
+      // `preMerge` is the *effective* mode (post-fallback), not `opts.preMerge`,
+      // so a fallen-back compile imports the handlers plain mode references.
       if (
         options !== undefined &&
-        (options !== false || !opts.preMerge) &&
+        (options !== false || !preMerge) &&
         runtimeRules.includes(name)
       ) {
         used.add(name);
@@ -126,7 +136,9 @@ export function compileHandlersImport(
 ): string {
   const ns = opts.handlersImportName || "__ruleHandlers__";
   const id = opts.handlersImportId || "h3-rules";
-  const names = usedRuleHandlerNames(rules, opts);
+  // Resolve preMerge the same way compileFindRouteRules does so a fallen-back
+  // compile imports exactly the handlers its generated code references.
+  const names = usedRuleHandlerNames(rules, opts, resolveEffectivePreMerge(rules, opts));
   if (names.length === 0) {
     return "";
   }
@@ -145,8 +157,47 @@ export function compileRouteRulesModule(
   rules: Record<string, RouteRules>,
   opts: CompileRouteRulesOptions = {},
 ): string {
-  const handlersImport = compileHandlersImport(rules, opts);
-  return `${handlersImport ? handlersImport + "\n" : ""}export const findRouteRules = ${compileFindRouteRules(rules, opts)};\n`;
+  // Resolve preMerge once up front (warning on fallback here) and hand the
+  // sub-calls the already-resolved mode, so a non-chain-clean rule set warns a
+  // single time rather than once per sub-call.
+  const resolved: CompileRouteRulesOptions = {
+    ...opts,
+    preMerge: resolveEffectivePreMerge(rules, opts),
+  };
+  const handlersImport = compileHandlersImport(rules, resolved);
+  return `${handlersImport ? handlersImport + "\n" : ""}export const findRouteRules = ${compileFindRouteRules(rules, resolved)};\n`;
+}
+
+/**
+ * Resolve the effective `preMerge` for compilation. Pre-merge requires a
+ * chain-clean rule set; unlike the runtime matcher (where a misconfigured
+ * `preMerge` is a startup error the developer should see), the compiler treats
+ * pre-merge as an optional throughput optimization and is **fail-safe**: if the
+ * pre-merge analysis rejects the rule set (partial overlap, unanalyzable
+ * pattern), it warns and reports plain mode so the build still produces a
+ * correct (un-pre-merged) matcher. Resolved identically wherever the compiler
+ * branches on preMerge so generated code, handler imports, and used-handler
+ * names stay consistent.
+ */
+function resolveEffectivePreMerge(
+  rules: Record<string, RouteRules>,
+  opts: CompileRouteRulesOptions,
+): boolean {
+  if (!opts.preMerge) {
+    return false;
+  }
+  try {
+    // Building the router runs the pre-merge analysis, which throws on a
+    // non-chain-clean rule set (see preMergeRuleLayers). The router itself is
+    // rebuilt by the caller; this is only a validity probe.
+    createRulesRouter(rules, {}, opts.baseURL, true);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[h3-rules] compiler: preMerge could not be applied — falling back to plain compilation.\n  ${(error as Error).message}`,
+    );
+    return false;
+  }
 }
 
 // Serialize a pre-merged layer wrapper (preMerge mode).

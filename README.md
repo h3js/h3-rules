@@ -100,7 +100,7 @@ For a given `method + pathname` the merged result is fully deterministic, so `me
 
 #### Pre-merging
 
-`preMerge: true` resolves each pattern's subsumption chain up front (at matcher startup, or at build time via the compiler option) so per-request resolution takes only the most specific matched layer instead of merging all matched layers (~20% faster on cold paths; composes with `memoize` for warm ones). It is exact, but requires an unambiguous rule set: it throws at startup/compile time if two patterns partially overlap (e.g. `/a/*/c` vs `/a/b/*` — the most specific match would be ambiguous) or use patterns it cannot analyze (regex params). Method-scoped and method-agnostic rules, `false` resets, and per-rule `params` behave identically to the default per-request merge (a tested invariant).
+`preMerge: true` resolves each pattern's subsumption chain up front (at matcher startup, or at build time via the compiler option) so per-request resolution takes only the most specific matched layer instead of merging all matched layers (~20% faster on cold paths; composes with `memoize` for warm ones). It is exact, but requires an unambiguous rule set: if two patterns partially overlap (e.g. `/a/*/c` vs `/a/b/*` — the most specific match would be ambiguous) or use patterns it cannot analyze (regex params), the **runtime matcher throws at startup** (a misconfigured `preMerge` is a startup error). The **compiler is fail-safe**: it emits a `console.warn` and falls back to plain compilation so the build still produces a correct matcher. Method-scoped and method-agnostic rules, `false` resets, and per-rule `params` behave identically to the default per-request merge (a tested invariant).
 
 ### Compiled matcher (`h3-rules/compiler`)
 

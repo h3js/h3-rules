@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   RUNTIME_RULE_NAMES,
   compileFindRouteRules,
@@ -179,6 +179,71 @@ describe("generated code shape", () => {
       'import { headers as __ruleHandlers__$headers } from "h3-rules";',
     );
     expect(compileFindRouteRules(rules, { preMerge: true })).not.toContain("$basicAuth");
+  });
+});
+
+describe("fail-safe preMerge", () => {
+  // A non-chain-clean rule set (partial overlap) with a `false` reset on a
+  // runtime rule: preMerge would resolve the reset away (no `$basicAuth`), plain
+  // mode serializes it with its handler. If the fallback desynced find codegen
+  // from the handlers import, generated code would reference an un-imported
+  // binding — so this fixture also guards the import/reference contract.
+  const NON_CHAIN_CLEAN = {
+    "/a/*/c": { headers: { a: "1" }, basicAuth: false },
+    "/a/b/*": { headers: { b: "2" } },
+  } as const;
+
+  it("compileHandlersImport falls back to plain handler set (imports the reset's handler)", () => {
+    const rules = normalizeRouteRules(NON_CHAIN_CLEAN);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // preMerge requested but not applicable → plain mode → `basicAuth: false`
+      // is serialized with its handler, so its import must be present.
+      expect(compileHandlersImport(rules, { preMerge: true })).toBe(
+        'import { basicAuth as __ruleHandlers__$basicAuth, headers as __ruleHandlers__$headers } from "h3-rules";',
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/preMerge.*falling back/s));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps find references and handler imports in sync when falling back", () => {
+    const rules = normalizeRouteRules(NON_CHAIN_CLEAN);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const code = compileFindRouteRules(rules, { preMerge: true });
+      const bindings = (source: string) =>
+        [...new Set([...source.matchAll(/__ruleHandlers__\$(\w+)/g)].map((m) => m[1]!))].sort();
+      expect(bindings(code)).toEqual(bindings(compileHandlersImport(rules, { preMerge: true })));
+      // The fallback emits the plain `$basicAuth` handler for the reset.
+      expect(bindings(code)).toContain("basicAuth");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("compileRouteRulesModule warns once and emits a working plain module", () => {
+    const rules = normalizeRouteRules(NON_CHAIN_CLEAN);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const mod = compileRouteRulesModule(rules, { preMerge: true });
+      // Resolved once up front, not once per sub-call.
+      expect(warn).toHaveBeenCalledTimes(1);
+      // Import and codegen agree: the module evaluates without a ReferenceError.
+      expect(mod).toContain("__ruleHandlers__$basicAuth");
+      const findSrc = mod
+        .slice(mod.indexOf("=") + 1)
+        .trim()
+        .replace(/;\s*$/, "");
+      const compiled = createMatcherFromFind(evaluateFind(findSrc));
+      const plain = createRouteRulesMatcher(rules);
+      for (const path of ["/a/b/c", "/a/x/c", "/a/b/x"]) {
+        expect(snapshotResult(compiled("GET", path))).toEqual(snapshotResult(plain("GET", path)));
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

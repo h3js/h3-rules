@@ -1,5 +1,5 @@
 import { compareRoutes } from "rou3";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { compileFindRouteRules } from "../src/compiler.ts";
 import { createMatcherFromFind, createRouteRulesMatcher } from "../src/match.ts";
 import type { FindRouteRules } from "../src/match.ts";
@@ -110,18 +110,34 @@ describe("preMerge soundness checks", () => {
     expect(matcher("GET", "/a/x").routeRules.headers!.options).toEqual({ a: "broad" });
   });
 
-  it("compileFindRouteRules rejects unordered overlaps at compile time too", () => {
-    // The compiler entry shares createRulesRouter → preMergeRuleLayers with the
-    // runtime constructor; pin the throw at this entry point independently.
-    expect(() =>
-      compileFindRouteRules(
-        normalizeRouteRules({
-          "/a/*/c": { headers: { a: "1" } },
-          "/a/b/*": { headers: { b: "2" } },
-        }),
-        { preMerge: true },
-      ),
-    ).toThrow(/partially overlap/);
+  it("compileFindRouteRules is fail-safe on unordered overlaps (warns + falls back)", () => {
+    // The compiler shares createRulesRouter → preMergeRuleLayers with the
+    // runtime constructor, but — unlike the runtime, which throws — it is
+    // fail-safe: a non-chain-clean rule set warns and compiles plain instead of
+    // failing the build.
+    const rules = normalizeRouteRules({
+      "/a/*/c": { headers: { a: "1" } },
+      "/a/b/*": { headers: { b: "2" } },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const code = compileFindRouteRules(rules, { preMerge: true });
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/preMerge.*falling back/s));
+      // The generated find is the plain (un-pre-merged) matcher, matching the
+      // plain runtime matcher over the overlapping region.
+      // eslint-disable-next-line no-new-func
+      const find = new Function(
+        ...Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`),
+        `return (${code});`,
+      )(...Object.values(ruleHandlers)) as FindRouteRules;
+      const compiled = createMatcherFromFind(find);
+      const plain = createRouteRulesMatcher(rules);
+      for (const path of ["/a/b/c", "/a/x/c", "/a/b/x"]) {
+        expect(snapshotResult(compiled("GET", path))).toEqual(snapshotResult(plain("GET", path)));
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("throws on regex pairs whose containment is undecidable", () => {
