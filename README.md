@@ -40,15 +40,15 @@ Patterns are matched with [rou3](https://github.com/h3js/rou3) against `event.ur
 
 ### Rules
 
-| Rule        | Behavior                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------- |
-| `headers`   | Set response headers.                                                                                               |
-| `redirect`  | Redirect (string defaults to status `307`; `/**` targets append the matched tail).                                  |
-| `proxy`     | Proxy the request to another origin or in-app path (same `/**` tail behavior).                                      |
-| `cache`     | Wrap the matched route handler with a cached handler ([ocache](https://github.com/unjs/ocache)).                    |
-| `basicAuth` | HTTP Basic Authentication (runs before redirect/proxy/cache).                                                       |
-| `cors`      | Shortcut for permissive CORS headers (your `headers` win).                                                          |
-| `swr`       | Shortcut for `cache: { swr: true, maxAge?: number }` (`swr: 0` is valid; `swr: false` resets an inherited `cache`). |
+| Rule        | Behavior                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headers`   | Set response headers. Applied to the final response (after `cache`/`redirect`/`proxy`), so a `cache-control` here overrides ocache's computed value. |
+| `redirect`  | Redirect (string defaults to status `307`; `/**` targets append the matched tail).                                                                   |
+| `proxy`     | Proxy the request to another origin or in-app path (same `/**` tail behavior).                                                                       |
+| `cache`     | Wrap the matched route handler with a cached handler ([ocache](https://github.com/unjs/ocache)).                                                     |
+| `basicAuth` | HTTP Basic Authentication (runs before redirect/proxy/cache).                                                                                        |
+| `cors`      | Shortcut for permissive CORS headers (your `headers` win).                                                                                           |
+| `swr`       | Shortcut for `cache: { swr: true, maxAge?: number }` (`swr: 0` is valid; `swr: false` resets an inherited `cache`).                                  |
 
 Setting a rule to `false` on a more specific pattern resets it:
 

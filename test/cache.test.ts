@@ -118,6 +118,34 @@ describe("cache rule", () => {
     expect(wrap2).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a `headers` cache-control override win over the cache handler (post-cache order)", async () => {
+    // Regression for h3js/h3-rules#5: the cache handler returns its own Response
+    // (and ocache computes `cache-control`), so a request-phase header set would
+    // be clobbered. `headers` runs post-response (order -1), applying over the
+    // cached response on both the miss and the subsequent hit.
+    let calls = 0;
+    const app = createApp({
+      "/cached-headers/**": {
+        cache: { swr: true, maxAge: 60 },
+        headers: { "cache-control": "public, max-age=1", "x-extra": "1" },
+      },
+    });
+    app.get("/cached-headers/:id", () => ({ calls: ++calls }));
+
+    // miss: handler runs, response cached, but our headers still win
+    const first = await app.fetch(new Request("http://test/cached-headers/a"));
+    expect(await first.json()).toEqual({ calls: 1 });
+    expect(first.headers.get("cache-control")).toBe("public, max-age=1");
+    expect(first.headers.get("x-extra")).toBe("1");
+
+    // hit: served from cache (handler not re-run), headers still applied
+    const second = await app.fetch(new Request("http://test/cached-headers/a"));
+    expect(await second.json()).toEqual({ calls: 1 });
+    expect(second.headers.get("cache-control")).toBe("public, max-age=1");
+    expect(second.headers.get("x-extra")).toBe("1");
+    expect(calls).toBe(1);
+  });
+
   it("never caches or serves cached bodies to unauthorized requests (basicAuth order -1)", async () => {
     let calls = 0;
     const app = createApp({

@@ -267,7 +267,9 @@ function getRouteRules(
  * Build the ordered middleware array from merged rules. Rules without a handler
  * (data-only) are skipped; handlers run sorted by `handler.order ?? 0` ascending
  * (`basicAuth` has `order: -1` so unauthorized requests are neither redirected
- * nor proxied).
+ * nor proxied; `headers` is also `order: -1` so it runs outer to `cache`/
+ * `redirect`/`proxy` and its headers land on the final response — see
+ * `src/rules/headers.ts`).
  */
 function createRuleMiddleware(routeRules: MatchedRouteRules): MatchResult["routeRuleMiddleware"] {
   const middleware: MatchResult["routeRuleMiddleware"] = [];

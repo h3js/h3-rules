@@ -129,11 +129,12 @@ describe("memoizeRouteRulesMatcher", () => {
     app.use(routeRules(RULES, { memoize: true }));
     app.get("/api/:section/:id", (event) => ({
       params: event.context.routeRules?.custom?.params,
-      cors: event.res.headers.get("access-control-allow-origin"),
     }));
     for (let i = 0; i < 3; i++) {
       const res = await app.fetch(new Request("http://test/api/users/42"));
-      expect(await res.json()).toEqual({ params: { section: "users", id: "42" }, cors: "*" });
+      expect(await res.json()).toEqual({ params: { section: "users", id: "42" } });
+      // the `cors` rule applies post-response (headers rule, order -1)
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
     }
     // encoded separator still hits the canonical auth gate when memoized
     const guarded = await app.fetch(new Request("http://test/admin%2fpanel"));
