@@ -90,7 +90,8 @@ export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"ca
  * compiled matchers import (`import { cache … } from "h3-rules"`), so its
  * memoization is module-scoped. Runtime matchers replace it with an
  * instance-scoped handler (see `createRouteRulesMatcher`); compiled consumers
- * needing custom wiring point `handlersImportId` at a module exporting their own
- * `createCacheRuleHandler(opts)` instance as `cache`.
+ * needing custom wiring point their own `createCacheRuleHandler(opts)` instance
+ * at the `cache` handler via the compiler's `runtimeRules` preset
+ * (`{ ...DEFAULT_RUNTIME_RULES, cache: "#your/cache" }`).
  */
 export const cache: RuleHandler<"cache"> = /* @__PURE__ */ createCacheRuleHandler();

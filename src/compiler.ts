@@ -17,15 +17,66 @@ export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
   "basicAuth",
 ]);
 
+/**
+ * Where a runtime rule's handler is imported from in generated code: either a
+ * bare module id (the handler is that module's named export under the rule
+ * name) or `{ source, export }` to also override the export name. The `source`
+ * is always explicit — there is no ambient default module.
+ *
+ * ```ts
+ * runtimeRules: {
+ *   ...DEFAULT_RUNTIME_RULES,                              // built-ins from "h3-rules"
+ *   cache: "#nitro/cache",                                 // built-in, other module
+ *   isr: { source: "#nitro/rules", export: "handleISR" },  // custom rule + export
+ * }
+ * ```
+ */
+export type RuntimeRuleImport = string | RuntimeRuleImportSpec;
+
+export interface RuntimeRuleImportSpec {
+  /** Module the handler is imported from. */
+  source: string;
+  /**
+   * Named export within `source`. Must be a valid JS identifier (it becomes an
+   * import binding in generated code).
+   * @default the rule name
+   */
+  export?: string;
+}
+
+/**
+ * Default `runtimeRules` preset: every built-in rule handler imported from
+ * `h3-rules` under its own name. Spread it to add custom rules or override a
+ * built-in's source (`{ ...DEFAULT_RUNTIME_RULES, isr: "#nitro/rules" }`).
+ */
+export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze(
+  Object.fromEntries(RUNTIME_RULE_NAMES.map((name) => [name, "h3-rules"])),
+);
+
+/** Whether `name` is registered as a runtime rule (own key of the `runtimeRules` record). */
+function isRuntimeRule(name: string, runtimeRules: Record<string, RuntimeRuleImport>): boolean {
+  return Object.hasOwn(runtimeRules, name);
+}
+
+/**
+ * Resolve a runtime rule's `{ source, export }` for its `<ns>$<name>` binding —
+ * a bare-string entry is the source (export defaults to the rule name), an
+ * object entry may also override the export. Caller must have checked
+ * {@link isRuntimeRule} first.
+ */
+function resolveRuntimeRule(
+  name: string,
+  runtimeRules: Record<string, RuntimeRuleImport>,
+): { source: string; export: string } {
+  const entry = runtimeRules[name]!;
+  return typeof entry === "string"
+    ? { source: entry, export: name }
+    : { source: entry.source, export: entry.export ?? name };
+}
+
 export interface CompileRouteRulesOptions {
   /** Base URL prefix for all rule patterns (trailing slash trimmed). */
   baseURL?: string;
-  /**
-   * Module id the generated code imports rule handlers from. Must expose a
-   * named export per runtime rule name (`h3-rules` exports the built-ins).
-   * @default "h3-rules"
-   */
-  handlersImportId?: string;
   /**
    * Identifier prefix for imported handlers in generated code (handler `name`
    * binds as `<prefix>$<name>`).
@@ -33,12 +84,15 @@ export interface CompileRouteRulesOptions {
    */
   handlersImportName?: string;
   /**
-   * Rule names that reference a runtime handler (`<ns>.<name>`) in generated
-   * code. Extend when registering custom handlers on the runtime side. Names
-   * bind as JS identifiers in generated code, so they must be valid identifiers.
-   * @default RUNTIME_RULE_NAMES
+   * Runtime rules that reference a handler (bound `<ns>$<name>`) in generated
+   * code, keyed by rule name. Each value is a {@link RuntimeRuleImport} — a
+   * module id, or `{ source, export }`. Spread {@link DEFAULT_RUNTIME_RULES} to
+   * extend the built-ins with custom handlers or override a built-in's source.
+   * Keys bind as JS identifiers in generated code, so they must be valid
+   * identifiers.
+   * @default DEFAULT_RUNTIME_RULES
    */
-  runtimeRules?: readonly string[];
+  runtimeRules?: Record<string, RuntimeRuleImport>;
   /**
    * Pre-merge each pattern's subsumption chain at compile time so per-request
    * resolution takes only the most specific matched layer instead of merging
@@ -78,7 +132,7 @@ export function compileFindRouteRules(
   // resolved identically in compileHandlersImport so imports and references
   // stay in sync.
   const router = createRulesRouter(rules, {}, opts.baseURL, resolveEffectivePreMerge(rules, opts));
-  const runtimeRules = opts.runtimeRules || RUNTIME_RULE_NAMES;
+  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
   const ns = opts.handlersImportName || "__ruleHandlers__";
   assertHandlerBinding(ns, "handlersImportName");
   return compileRouterToString(router, undefined, {
@@ -102,7 +156,7 @@ function usedRuleHandlerNames(
   opts: CompileRouteRulesOptions = {},
   preMerge = false,
 ): string[] {
-  const runtimeRules = opts.runtimeRules || RUNTIME_RULE_NAMES;
+  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
   const used = new Set<string>();
   for (const key in rules) {
     for (const [name, options] of Object.entries(rules[key]!)) {
@@ -113,7 +167,7 @@ function usedRuleHandlerNames(
       if (
         options !== undefined &&
         (options !== false || !preMerge) &&
-        runtimeRules.includes(name)
+        isRuntimeRule(name, runtimeRules)
       ) {
         used.add(name);
       }
@@ -126,16 +180,17 @@ function usedRuleHandlerNames(
  * Import statement for the rule handlers used by compiled output: imports
  * **exactly** the handlers the rule set references (empty string if none), so
  * unused handlers — and their dependencies (e.g. ocache for `cache`) — stay
- * tree-shakeable. The handlers module (`handlersImportId`) must have a named
- * export per runtime rule name (`h3-rules` exports the built-ins; consumers
- * like Nitro point this at their own module to add/override handlers).
+ * tree-shakeable. Each handler's source comes from its `runtimeRules` entry
+ * (`h3-rules` for the built-ins via {@link DEFAULT_RUNTIME_RULES}; consumers
+ * like Nitro point individual rules at their own module to add/override
+ * handlers), and each source's module must have a named export per handler.
  */
 export function compileHandlersImport(
   rules: Record<string, RouteRules>,
   opts: CompileRouteRulesOptions = {},
 ): string {
   const ns = opts.handlersImportName || "__ruleHandlers__";
-  const id = opts.handlersImportId || "h3-rules";
+  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
   // Resolve preMerge the same way compileFindRouteRules does so a fallen-back
   // compile imports exactly the handlers its generated code references.
   const names = usedRuleHandlerNames(rules, opts, resolveEffectivePreMerge(rules, opts));
@@ -143,10 +198,26 @@ export function compileHandlersImport(
     return "";
   }
   assertHandlerBinding(ns, "handlersImportName");
+  // Group each used handler's `<export> as <ns>$<name>` specifier under its
+  // source module — a rule can override where its handler comes from, so one
+  // import statement per distinct source. `names` is sorted, so the specifiers
+  // land in binding order within each group; sources are sorted below for a
+  // deterministic statement order.
+  const bySource = new Map<string, string[]>();
   for (const name of names) {
     assertHandlerBinding(name, "runtime rule name");
+    const { source, export: exportName } = resolveRuntimeRule(name, runtimeRules);
+    assertHandlerBinding(exportName, "runtime rule export");
+    let specs = bySource.get(source);
+    if (!specs) {
+      bySource.set(source, (specs = []));
+    }
+    specs.push(`${exportName} as ${ns}$${name}`);
   }
-  return `import { ${names.map((name) => `${name} as ${ns}$${name}`).join(", ")} } from ${JSON.stringify(id)};`;
+  return [...bySource.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([source, specs]) => `import { ${specs.join(", ")} } from ${JSON.stringify(source)};`)
+    .join("\n");
 }
 
 /**
@@ -204,7 +275,7 @@ function resolveEffectivePreMerge(
 function serializePreMergedRouteRules(
   data: PreMergedRouteRules,
   ns: string,
-  runtimeRules: readonly string[],
+  runtimeRules: Record<string, RuntimeRuleImport>,
 ): string {
   return `{route:${JSON.stringify(data.route)},rules:${serializeRouteRuleEntries(
     data.rules,
@@ -220,11 +291,12 @@ function serializePreMergedRouteRules(
 function serializeRouteRuleEntries(
   entries: (RouteRuleEntry & { paramRoutes?: string[] })[],
   ns: string,
-  runtimeRules: readonly string[],
+  runtimeRules: Record<string, RuntimeRuleImport>,
 ): string {
   return `[${entries
     .map((entry) => {
-      if (runtimeRules.includes(entry.name)) {
+      const runtime = isRuntimeRule(entry.name, runtimeRules);
+      if (runtime) {
         assertHandlerBinding(entry.name, "runtime rule name");
       }
       assertSerializableOptions(entry.options, entry, "options");
@@ -232,7 +304,7 @@ function serializeRouteRuleEntries(
         `name:${JSON.stringify(entry.name)}`,
         `route:${JSON.stringify(entry.route)}`,
         entry.method && `method:${JSON.stringify(entry.method)}`,
-        runtimeRules.includes(entry.name) && `handler:${ns}$${entry.name}`,
+        runtime && `handler:${ns}$${entry.name}`,
         `options:${JSON.stringify(entry.options)}`,
         entry.paramRoutes && `paramRoutes:${JSON.stringify(entry.paramRoutes)}`,
       ]

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_RUNTIME_RULES,
   RUNTIME_RULE_NAMES,
   compileFindRouteRules,
   compileHandlersImport,
@@ -129,25 +130,86 @@ describe("generated code shape", () => {
     expect(matcher("GET", "/a").routeRules.prerender!.options).toBe(true);
   });
 
-  it("is parameterized on the handlers import id/name", () => {
+  it("is parameterized on the handler binding prefix and per-rule source", () => {
     const rules = normalizeRouteRules({ "/a": { redirect: "/b" } });
     expect(compileHandlersImport(rules)).toBe(
       'import { redirect as __ruleHandlers__$redirect } from "h3-rules";',
     );
     expect(
-      compileHandlersImport(rules, { handlersImportId: "#my/rules", handlersImportName: "__rr__" }),
+      compileHandlersImport(rules, {
+        runtimeRules: { redirect: "#my/rules" },
+        handlersImportName: "__rr__",
+      }),
     ).toBe('import { redirect as __rr__$redirect } from "#my/rules";');
     const code = compileFindRouteRules(rules, { handlersImportName: "__rr__" });
     expect(code).toContain("handler:__rr__$redirect");
   });
 
-  it("supports custom runtime rule names", () => {
+  it("DEFAULT_RUNTIME_RULES presets every built-in to the h3-rules source", () => {
+    expect(Object.keys(DEFAULT_RUNTIME_RULES).sort()).toEqual([...RUNTIME_RULE_NAMES].sort());
+    for (const name of RUNTIME_RULE_NAMES) {
+      expect(DEFAULT_RUNTIME_RULES[name]).toBe("h3-rules");
+    }
+  });
+
+  it("supports custom runtime rule names via a bare-string source", () => {
     const rules = normalizeRouteRules({ "/a": { shout: "x" } });
-    const opts = { runtimeRules: [...RUNTIME_RULE_NAMES, "shout"] };
+    const opts = { runtimeRules: { shout: "h3-rules" } };
     expect(compileFindRouteRules(rules, opts)).toContain("handler:__ruleHandlers__$shout");
     expect(compileHandlersImport(rules, opts)).toBe(
       'import { shout as __ruleHandlers__$shout } from "h3-rules";',
     );
+  });
+
+  it("sources a rule handler from a per-rule { source, export } override", () => {
+    // A custom rule handler living in its own module under a different export
+    // name, alongside a built-in kept on the h3-rules source via the preset.
+    const rules = normalizeRouteRules({ "/a/**": { redirect: "/b", isr: 60 } });
+    const opts = {
+      runtimeRules: {
+        ...DEFAULT_RUNTIME_RULES,
+        isr: { source: "#nitro/rules", export: "handleISR" },
+      },
+    };
+    expect(compileFindRouteRules(rules, opts)).toContain("handler:__ruleHandlers__$isr");
+    // One import per source, sources sorted; export aliased to the `<ns>$<name>`
+    // binding the generated code references.
+    expect(compileHandlersImport(rules, opts)).toBe(
+      'import { handleISR as __ruleHandlers__$isr } from "#nitro/rules";\n' +
+        'import { redirect as __ruleHandlers__$redirect } from "h3-rules";',
+    );
+  });
+
+  it("overrides a built-in's source module (export defaults to the rule name)", () => {
+    const rules = normalizeRouteRules({ "/a/**": { cache: { maxAge: 60 }, headers: { a: "1" } } });
+    const opts = { runtimeRules: { ...DEFAULT_RUNTIME_RULES, cache: "#nitro/cache" } };
+    expect(compileHandlersImport(rules, opts)).toBe(
+      'import { cache as __ruleHandlers__$cache } from "#nitro/cache";\n' +
+        'import { headers as __ruleHandlers__$headers } from "h3-rules";',
+    );
+  });
+
+  it("groups multiple handlers sharing a source into one import statement", () => {
+    const rules = normalizeRouteRules({
+      "/a/**": { redirect: "/b", isr: true, prerender: true },
+    });
+    const opts = {
+      runtimeRules: {
+        redirect: "#nitro/rules",
+        isr: { source: "#nitro/rules", export: "handleISR" },
+        prerender: "#nitro/rules",
+      },
+    };
+    // All three share `#nitro/rules` → a single import, specifiers in binding order.
+    expect(compileHandlersImport(rules, opts)).toBe(
+      'import { handleISR as __ruleHandlers__$isr, prerender as __ruleHandlers__$prerender, redirect as __ruleHandlers__$redirect } from "#nitro/rules";',
+    );
+  });
+
+  it("throws when a per-rule export is not a valid JS identifier", () => {
+    const rules = normalizeRouteRules({ "/a": { redirect: "/b" } });
+    const opts = { runtimeRules: { redirect: { source: "h3-rules", export: "not valid" } } };
+    expect(() => compileHandlersImport(rules, opts)).toThrow(/valid JS identifier/);
   });
 
   it("emits a complete module", () => {
@@ -281,7 +343,7 @@ describe("compile-time validation", () => {
     // Handler references bind as `<ns>$<name>` identifiers in generated code —
     // fail at compile time, not with a parse error in the consumer's module.
     const rules = normalizeRouteRules({ "/a": { "my-rule": "x" } });
-    const opts = { runtimeRules: ["my-rule"] };
+    const opts = { runtimeRules: { "my-rule": "h3-rules" } };
     expect(() => compileHandlersImport(rules, opts)).toThrow(/valid JS identifier/);
     expect(() => compileFindRouteRules(rules, opts)).toThrow(/valid JS identifier/);
     expect(() =>
