@@ -1,7 +1,6 @@
 import { addRoute, createRouter, findAllRoutes } from "rou3";
 import type { RouterContext } from "rou3";
 import { createCacheRuleHandler } from "./rules/cache.ts";
-import type { CacheRuleOptions } from "./rules/cache.ts";
 import { parseRouteKey } from "./internal/key.ts";
 import { mergeMatchedRouteRules } from "./merge.ts";
 import type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
@@ -9,43 +8,26 @@ import { preMergeRuleLayers } from "./internal/premerge.ts";
 import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import { ruleHandlers } from "./rules/index.ts";
 import { canonicalPath } from "./internal/scope.ts";
-import type {
-  MatchResult,
-  MatchedRouteRule,
-  MatchedRouteRules,
-  RouteRules,
-  RuleHandlers,
-} from "./types.ts";
+import type { MatchResult, MatchedRouteRule, RouteRules, RuleHandlers } from "./types.ts";
 
 export interface RouteRulesMatcherOptions {
   /**
-   * Base URL prefix for all rule patterns (trailing slash trimmed), matching
-   * Nitro's `Router` constructor behavior.
+   * Base URL prefix for all rule patterns (trailing slash trimmed).
    */
   baseURL?: string;
   /**
-   * Add or override rule handler constructors by name. Built-ins (`headers`,
-   * `redirect`, `proxy`, `cache`, `basicAuth`) are registry defaults; setting a
-   * name to `undefined` makes that rule data-only.
+   * Add or override rule handler constructors by name.
+   * Built-ins (`headers`, `redirect`, `proxy`, `cache`, `basicAuth`) are registry defaults.
+   * setting a name to `undefined` makes that rule data-only.
    */
   handlers?: RuleHandlers;
-  /** Cache rule wiring (ocache options / storage / full replacement). */
-  cache?: CacheRuleOptions;
-  /**
-   * Memoize match results per `method + pathname` (see
-   * {@link memoizeRouteRulesMatcher}). For a given path the merged result is
-   * fully deterministic, so this skips the rule lookup, canonicalization, merge,
-   * and middleware construction on repeat requests. `true` uses the default
-   * entry cap; pass `{ max }` to tune it.
-   */
-  memoize?: boolean | MatcherMemoizeOptions;
   /**
    * Pre-merge each pattern's subsumption chain at startup so per-request
    * resolution takes only the most specific matched layer instead of merging
    * all layers. Exact — but requires a **chain-clean** rule set: throws at
    * startup if two patterns partially overlap (e.g. `/a/*​/c` vs `/a/b/*`) or
-   * use patterns that cannot be analyzed (regex params). Composes with
-   * `memoize`.
+   * use patterns that cannot be analyzed (regex params).
+   * Composes with {@link memoizeRouteRulesMatcher}.
    */
   preMerge?: boolean;
 }
@@ -63,16 +45,6 @@ export type RouteRulesMatcher = (method: string, pathname: string) => MatchResul
 
 /** A `findAllRoutes`-compatible lookup, as produced by `rou3/compiler` codegen. */
 export type FindRouteRules = (method: string, pathname: string) => RouteRuleLayer[];
-
-// Default rule handler registry. `cache` is created per matcher instance so its
-// handler memoization is instance-scoped (see src/rules/cache.ts).
-function createDefaultHandlers(opts?: RouteRulesMatcherOptions): RuleHandlers {
-  return {
-    ...ruleHandlers,
-    cache: createCacheRuleHandler(opts?.cache),
-    ...opts?.handlers,
-  };
-}
 
 /**
  * Explode a normalized rule set into per-rule entries and register them on a
@@ -98,9 +70,8 @@ export function createRulesRouter(
   }
   // Explode each rule into per-name entries, grouped by (method, path)
   const byPath = new Map<string, Map<string, RouteRuleEntry[]>>();
-  for (const key in rules) {
+  for (const [key, rule] of Object.entries(rules)) {
     const { method, path } = parseRouteKey(key);
-    const rule = rules[key]!;
     const entries: RouteRuleEntry[] = [];
     for (const [name, options] of Object.entries(rule)) {
       if (options === undefined) {
@@ -139,54 +110,100 @@ export function createRulesRouter(
   return router;
 }
 
-// The `redirect`/`proxy` scope check (`resolveRuleTarget`) runs against the full
-// request path, which includes the `baseURL` prefix the patterns are registered
-// under — compose it into the normalized `base` (fresh options object; the
-// normalized rule set is never mutated) so `/**` targets validate and strip
-// correctly for a mounted rule set.
-function withScopeBase(name: string, options: unknown, baseURL: string): unknown {
-  if (
-    (name === "redirect" || name === "proxy") &&
-    options !== null &&
-    typeof options === "object" &&
-    typeof (options as { base?: unknown }).base === "string"
-  ) {
-    return { ...options, base: baseURL + (options as { base: string }).base };
-  }
-  return options;
-}
-
 /**
- * Create a route-rules matcher from a **normalized** rule set (see
- * {@link normalizeRouteRules}). Returns `(method, pathname) =>
- * { routeRules, routeRuleMiddleware }`.
+ * Create a route-rules matcher from a **normalized** rule set (see {@link normalizeRouteRules}).
+ * Returns `(method, pathname) => { routeRules, routeRuleMiddleware }`.
  */
 export function createRouteRulesMatcher(
   rules: Record<string, RouteRules>,
   opts?: RouteRulesMatcherOptions,
 ): RouteRulesMatcher {
-  const handlers = createDefaultHandlers(opts);
+  // Default rule handler registry. `cache` is created per matcher instance
+  // so its handler memoization is instance-scoped (see src/rules/cache.ts).
+  // Custom cache wiring (storage / defaults / full replacement) goes through
+  // `handlers: { cache: createCacheRuleHandler(opts) }` — when the caller
+  // supplies its own `cache` (even `undefined`, to make it data-only) the
+  // default instance handler is skipped rather than built and discarded.
+  const handlers = {
+    ...ruleHandlers,
+    ...(opts?.handlers && "cache" in opts.handlers
+      ? undefined
+      : { cache: createCacheRuleHandler() }),
+    ...opts?.handlers,
+  };
+
   const router = createRulesRouter(rules, handlers, opts?.baseURL, opts?.preMerge);
+
   const findRouteRules: FindRouteRules = (method, pathname) =>
     findAllRoutes(router, method, pathname) as RouteRuleLayer[];
-  return createMatcherFromFind(findRouteRules, opts);
+
+  // Memoization is opt-in via {@link memoizeRouteRulesMatcher} — wrap the
+  // returned matcher explicitly. Keeping it decoupled from this constructor (and
+  // from createMatcherFromFind) lets an un-memoized bundle tree-shake it away.
+  return createMatcherFromFind(findRouteRules);
 }
 
 /**
  * Create a matcher from a `findAllRoutes`-compatible lookup — the integration
  * point for compiled matchers (`h3-rules/compiler` output). Runtime and compiled
  * matchers share this exact code path, so they produce identical results.
- * Accepts the `memoize` matcher option.
+ *
+ * Memoization is intentionally **not** wired in here: keeping the reference out
+ * of this function lets an un-memoized compiled bundle tree-shake
+ * {@link memoizeRouteRulesMatcher} away. Opt in by composing it explicitly —
+ * `memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules))`. The same
+ * composition wraps the matcher from `createRouteRulesMatcher`.
  */
-export function createMatcherFromFind(
-  findRouteRules: FindRouteRules,
-  opts?: Pick<RouteRulesMatcherOptions, "memoize">,
-): RouteRulesMatcher {
-  const matcher: RouteRulesMatcher = (method, pathname) =>
-    getRouteRules(findRouteRules, method, pathname);
-  return opts?.memoize
-    ? memoizeRouteRulesMatcher(matcher, opts.memoize === true ? undefined : opts.memoize)
-    : matcher;
+export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRulesMatcher {
+  return (method, pathname) => {
+    // h3 routes the served handler/middleware on the raw `pathname` (`%2f`/`%5c` stay opaque)
+    // so the rules the raw path matches describe the handler that actually runs and must all apply.
+    const rawLayers = findRouteRules(method, pathname);
+
+    // An encoded separator must not let a request dodge a rule it would still hit
+    // once the downstream decodes `%2f`/`%5c` back to `/`
+    // e.g. `/app/admin%2fpanel` is served by a broad rule on the raw path but canonicalizes to
+    // `/app/admin/panel`, which a narrower (auth) rule guards.
+    // So also match on the canonical path. Fast path: identical paths skip the second lookup.
+    const canonical = canonicalPath(pathname);
+    const canonicalLayers = canonical === pathname ? undefined : findRouteRules(method, canonical);
+
+    if (!rawLayers?.length && !canonicalLayers?.length) {
+      return { routeRules: {}, routeRuleMiddleware: [] };
+    }
+
+    // Resolve each path independently so a rule's `false` reset only affects the
+    // path it is configured for, then union the two: a rule applies if the served
+    // (raw) or the decoded (canonical) path enables it. The canonical pass can only
+    // add or override — never delete — a rule the served path resolved, so an
+    // encoded separator can neither dodge a rule nor strip one off the path that is
+    // actually served. On overlap the canonical rule wins because it is applied
+    // last (e.g. the `/app/admin/**` auth gate over a broad `/app/**` rule for
+    // `/app/admin%2fpanel`) — this is unconditional, not a specificity comparison,
+    // so a canonical match from a broader pattern also overrides the raw options.
+    // Proxy/redirect still forward the raw `event.url.pathname`.
+    const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers);
+
+    // Build the ordered middleware array from merged rules. Rules without a
+    // handler (data-only) are skipped; handlers run sorted by `handler.order || 0`
+    // ascending (`basicAuth` has `order: -1` so unauthorized requests are neither
+    // redirected nor proxied; `headers` is also `order: -1` so it runs outer to
+    // `cache`/`redirect`/`proxy` and its headers land on the final response — see
+    // `src/rules/headers.ts`).
+    const routeRuleMiddleware: MatchResult["routeRuleMiddleware"] = [];
+    const orderedRules = (Object.values(routeRules) as MatchedRouteRule[]).sort(
+      (a, b) => (a.handler?.order || 0) - (b.handler?.order || 0),
+    );
+    for (const rule of orderedRules) {
+      // merged rule sets never contain `false` options (types.ts: MatchedRouteRule)
+      if (!rule.handler) {
+        continue;
+      }
+      routeRuleMiddleware.push(rule.handler(rule));
+    }
+
+    return { routeRules, routeRuleMiddleware };
+  };
 }
 
 /**
@@ -225,63 +242,23 @@ export function memoizeRouteRulesMatcher(
   };
 }
 
-function getRouteRules(
-  findRouteRules: FindRouteRules,
-  method: string,
-  pathname: string,
-): MatchResult {
-  // h3 routes the served handler/middleware on the raw `pathname` (`%2f`/`%5c`
-  // stay opaque), so the rules the raw path matches describe the handler that
-  // actually runs and must all apply.
-  const rawLayers = findRouteRules(method, pathname);
+// ------------------------------------------------------------------------
+// Internal
+// ------------------------------------------------------------------------
 
-  // An encoded separator must not let a request dodge a rule it would still hit
-  // once the downstream decodes `%2f`/`%5c` back to `/` — e.g. `/app/admin%2fpanel`
-  // is served by a broad rule on the raw path but canonicalizes to
-  // `/app/admin/panel`, which a narrower (auth) rule guards.
-  // So also match on the canonical path. Fast path: identical paths skip the
-  // second lookup.
-  const canonical = canonicalPath(pathname);
-  const canonicalLayers = canonical === pathname ? undefined : findRouteRules(method, canonical);
-
-  if (!rawLayers?.length && !canonicalLayers?.length) {
-    return { routeRules: {}, routeRuleMiddleware: [] };
+// The `redirect`/`proxy` scope check (`resolveRuleTarget`) runs against the full
+// request path, which includes the `baseURL` prefix the patterns are registered
+// under — compose it into the normalized `base` (fresh options object; the
+// normalized rule set is never mutated) so `/**` targets validate and strip
+// correctly for a mounted rule set.
+function withScopeBase(name: string, options: unknown, baseURL: string): unknown {
+  if (
+    (name === "redirect" || name === "proxy") &&
+    options !== null &&
+    typeof options === "object" &&
+    typeof (options as { base?: unknown }).base === "string"
+  ) {
+    return { ...options, base: baseURL + (options as { base: string }).base };
   }
-
-  // Resolve each path independently so a rule's `false` reset only affects the
-  // path it is configured for, then union the two: a rule applies if the served
-  // (raw) or the decoded (canonical) path enables it. The canonical pass can only
-  // add or override — never delete — a rule the served path resolved, so an
-  // encoded separator can neither dodge a rule nor strip one off the path that is
-  // actually served. On overlap the canonical rule wins because it is applied
-  // last (e.g. the `/app/admin/**` auth gate over a broad `/app/**` rule for
-  // `/app/admin%2fpanel`) — this is unconditional, not a specificity comparison,
-  // so a canonical match from a broader pattern also overrides the raw options.
-  // Proxy/redirect still forward the raw `event.url.pathname`.
-  const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers);
-
-  return { routeRules, routeRuleMiddleware: createRuleMiddleware(routeRules) };
-}
-
-/**
- * Build the ordered middleware array from merged rules. Rules without a handler
- * (data-only) are skipped; handlers run sorted by `handler.order ?? 0` ascending
- * (`basicAuth` has `order: -1` so unauthorized requests are neither redirected
- * nor proxied; `headers` is also `order: -1` so it runs outer to `cache`/
- * `redirect`/`proxy` and its headers land on the final response — see
- * `src/rules/headers.ts`).
- */
-function createRuleMiddleware(routeRules: MatchedRouteRules): MatchResult["routeRuleMiddleware"] {
-  const middleware: MatchResult["routeRuleMiddleware"] = [];
-  const orderedRules = (Object.values(routeRules) as MatchedRouteRule[]).sort(
-    (a, b) => (a.handler?.order || 0) - (b.handler?.order || 0),
-  );
-  for (const rule of orderedRules) {
-    // merged rule sets never contain `false` options (types.ts: MatchedRouteRule)
-    if (!rule.handler) {
-      continue;
-    }
-    middleware.push(rule.handler(rule));
-  }
-  return middleware;
+  return options;
 }

@@ -3,8 +3,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import type { Plugin } from "esbuild";
 import { describe, expect, it } from "vitest";
-import { compileRouteRulesModule } from "../src/compiler.ts";
-import { normalizeRouteRules } from "../src/normalize.ts";
+import { compileRouteRules } from "../src/compiler.ts";
 
 // Pins that the `h3-rules` export surface stays tree-shakeable — both via named
 // imports and via namespace member access (`import * as rules from "h3-rules";
@@ -49,7 +48,7 @@ const forceSideEffects: Plugin = {
 async function bundle(
   contents: string,
   opts?: { forceSideEffects?: boolean },
-): Promise<{ bytes: number; inputs: string[]; has: (m: string) => boolean }> {
+): Promise<{ bytes: number; code: string; inputs: string[]; has: (m: string) => boolean }> {
   const result = await build({
     stdin: { contents, resolveDir: ROOT, loader: "js" },
     bundle: true,
@@ -70,6 +69,7 @@ async function bundle(
     .sort();
   return {
     bytes: result.outputFiles[0]!.contents.byteLength,
+    code: result.outputFiles[0]!.text,
     inputs: contributing,
     has: (marker) => contributing.some((file) => file.includes(marker)),
   };
@@ -123,6 +123,17 @@ describe("tree-shaking (esbuild)", () => {
     expect(out.has("ufo")).toBe(false);
   });
 
+  it("un-memoized createMatcherFromFind shakes out the memoize wrapper", async () => {
+    // Memoization is wired in createRouteRulesMatcher, not createMatcherFromFind,
+    // so an un-memoized compiled matcher must not bundle memoizeRouteRulesMatcher
+    // (~240 B). `.keys().next()` is its FIFO eviction — a marker no other matcher
+    // code emits — so its absence pins the wrapper out of the compiled path.
+    const out = await bundle(
+      `import * as rules from "h3-rules";\nexport const m = rules.createMatcherFromFind(() => []);`,
+    );
+    expect(out.code).not.toContain(".next(");
+  });
+
   it("cache pulls ocache but nothing else", async () => {
     const out = await bundle(`import * as rules from "h3-rules";\nexport const c = rules.cache;`);
     expect(out.has("ocache")).toBe(true);
@@ -131,9 +142,7 @@ describe("tree-shaking (esbuild)", () => {
   });
 
   it("compiled codegen module shakes unused handler deps", async () => {
-    const mod = compileRouteRulesModule(
-      normalizeRouteRules({ "/api/**": { headers: { "cache-control": "s-maxage=60" } } }),
-    );
+    const mod = compileRouteRules({ "/api/**": { headers: { "cache-control": "s-maxage=60" } } });
     const out = await bundle(`${mod}\nexport const find = findRouteRules;`);
     expect(out.has("rou3")).toBe(false);
     expect(out.has("ocache")).toBe(false);

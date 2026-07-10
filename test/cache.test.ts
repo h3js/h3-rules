@@ -3,11 +3,14 @@ import type { EventHandler } from "h3";
 import { describe, expect, it, vi } from "vitest";
 import { routeRules } from "../src/h3.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
+import { createCacheRuleHandler } from "../src/rules/cache.ts";
 import type { CacheRuleOptions } from "../src/rules/cache.ts";
 
 const createApp = (config: Record<string, RouteRuleConfig>, cache?: CacheRuleOptions) => {
   const app = new H3();
-  app.use(routeRules(config, { cache }));
+  app.use(
+    routeRules(config, cache ? { handlers: { cache: createCacheRuleHandler(cache) } } : undefined),
+  );
   return app;
 };
 

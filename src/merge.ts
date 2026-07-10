@@ -41,8 +41,7 @@ export function mergeMatchedRouteRules(
   const routeRules = resolveLayers(rawLayers);
   if (canonicalLayers?.length) {
     const canonicalRules = resolveLayers(canonicalLayers);
-    for (const name in canonicalRules) {
-      const rule = canonicalRules[name as keyof MatchedRouteRules]!;
+    for (const rule of Object.values(canonicalRules) as MatchedRouteRule[]) {
       mergeRouteRule(routeRules, rule, rule.params);
     }
   }
@@ -65,6 +64,17 @@ function resolveLayers(layers: RouteRuleLayer[] | undefined): MatchedRouteRules 
   }
   return routeRules;
 }
+
+// `typeof null === "object"`: without this guard a more specific `null` option
+// would spread-merge into an inherited object (keeping it) instead of
+// overriding it. Shared with the build-time chain merge (premerge).
+export function isMergeableObject(value: unknown): value is object {
+  return value !== null && typeof value === "object";
+}
+
+// ------------------------------------------------------------------------
+// Internal
+// ------------------------------------------------------------------------
 
 // preMerge mode: the most specific matched layer already carries the fully
 // merged chain result — only per-rule params (path-dependent) are attached
@@ -106,7 +116,7 @@ function resolvePreMergedLayers(
 // onto the accumulated set. `false` resets an inherited rule; otherwise options
 // are merged (objects) or overridden, with the incoming — more specific or later
 // — rule winning. `route`/`params` always take the more specific match's values.
-export function mergeRouteRule(
+function mergeRouteRule(
   routeRules: MatchedRouteRules,
   rule: RouteRuleEntry | MatchedRouteRule,
   params: Record<string, string> | undefined,
@@ -135,11 +145,4 @@ export function mergeRouteRule(
   } else if (rule.options !== false) {
     routeRules[name] = { ...(rule as MatchedRouteRule), params } as never;
   }
-}
-
-// `typeof null === "object"`: without this guard a more specific `null` option
-// would spread-merge into an inherited object (keeping it) instead of
-// overriding it. Shared with the build-time chain merge (premerge).
-export function isMergeableObject(value: unknown): value is object {
-  return value !== null && typeof value === "object";
 }

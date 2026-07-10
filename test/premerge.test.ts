@@ -1,7 +1,11 @@
 import { compareRoutes } from "rou3";
 import { describe, expect, it, vi } from "vitest";
 import { compileFindRouteRules } from "../src/compiler.ts";
-import { createMatcherFromFind, createRouteRulesMatcher } from "../src/match.ts";
+import {
+  createMatcherFromFind,
+  createRouteRulesMatcher,
+  memoizeRouteRulesMatcher,
+} from "../src/match.ts";
 import type { FindRouteRules } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
@@ -39,10 +43,9 @@ describe("preMerge parity (compiled)", () => {
 
 describe("preMerge parity (composed with memoize)", () => {
   const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
-  const combined = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
-    preMerge: true,
-    memoize: true,
-  });
+  const combined = memoizeRouteRulesMatcher(
+    createRouteRulesMatcher(normalizeRouteRules(FIXTURE), { preMerge: true }),
+  );
 
   it.each(PROBES)("preMerged+memoized === plain for %s %s", (method, pathname) => {
     // Resolve twice: the first call populates the memo, the second must serve

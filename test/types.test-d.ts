@@ -3,6 +3,7 @@
 // failing `expectTypeOf`, fails the build. Not run by vitest (`.test-d.ts` does
 // not match the runtime test glob); it declares no runtime behavior.
 import { expectTypeOf } from "vitest";
+import { compileRouteRules } from "../src/compiler.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { routeRules } from "../src/h3.ts";
 import type { MatchedRouteRules, RouteRuleConfig, RouteRules } from "../src/types.ts";
@@ -41,6 +42,15 @@ const known: RouteRuleConfig = {
   basicAuth: { username: "u", password: "p" },
 };
 void known;
+
+// --- Compiler input: authored config or already-normalized rules ---
+
+// The compiler normalizes internally, so both shapes are valid input without a
+// cast. Note the `RouteRules` side of the union is open (index signature), so
+// the closed-interface typo check does not apply at the compiler boundary —
+// authoring config inline keeps typo safety only via the other entry points.
+compileRouteRules({ "/api/**": { swr: 60, cors: true } });
+compileRouteRules(normalizeRouteRules({ "/api/**": { swr: 60 } }));
 
 // --- Custom keys are re-enabled via module augmentation ---
 

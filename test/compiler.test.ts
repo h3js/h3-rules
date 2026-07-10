@@ -4,10 +4,15 @@ import {
   RUNTIME_RULE_NAMES,
   compileFindRouteRules,
   compileHandlersImport,
-  compileRouteRulesModule,
+  compileRouteRules,
 } from "../src/compiler.ts";
+import type { CompiledRouteRules } from "../src/compiler.ts";
 import * as h3Rules from "../src/index.ts";
-import { createMatcherFromFind, createRouteRulesMatcher } from "../src/match.ts";
+import {
+  createMatcherFromFind,
+  createRouteRulesMatcher,
+  memoizeRouteRulesMatcher,
+} from "../src/match.ts";
 import type { FindRouteRules, RouteRulesMatcher } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
@@ -26,8 +31,33 @@ function evaluateFind(code: string): FindRouteRules {
   ) as FindRouteRules;
 }
 
-function evaluateCompiled(rules: Record<string, RouteRuleConfig>): RouteRulesMatcher {
-  return createMatcherFromFind(evaluateFind(compileFindRouteRules(normalizeRouteRules(rules))));
+// Raw authored config in, no explicit normalize — the compiler normalizes
+// internally, so the parity grid below also pins auto-normalization against the
+// runtime matcher fed `normalizeRouteRules(config)`.
+function evaluateCompiled(config: Record<string, RouteRuleConfig>): RouteRulesMatcher {
+  return createMatcherFromFind(evaluateFind(compileFindRouteRules(config)));
+}
+
+// Evaluate a whole `compileRouteRules` module (with a `matcher` export) by
+// stripping the ESM `import`/`export` keywords and binding the referenced
+// `h3-rules` members — the handler locals plus the matcher-infra functions — as
+// parameters, then returning the requested export. Exercises the generated
+// matcher wrapper end to end, not just its source string.
+function evaluateModule(mod: CompiledRouteRules, exportName = "matcher"): RouteRulesMatcher {
+  const handlerParams = Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`);
+  const body = mod.body.replace(/\bexport const /g, "const ");
+  // eslint-disable-next-line no-new-func
+  const factory = new Function(
+    ...handlerParams,
+    "createMatcherFromFind",
+    "memoizeRouteRulesMatcher",
+    `${body}\nreturn ${exportName};`,
+  );
+  return factory(
+    ...Object.values(ruleHandlers),
+    createMatcherFromFind,
+    memoizeRouteRulesMatcher,
+  ) as RouteRulesMatcher;
 }
 
 describe("compiler parity", () => {
@@ -63,6 +93,8 @@ describe("compiler parity", () => {
   });
 
   it("compiled matcher works with baseURL", () => {
+    // Already-normalized input is equally valid compiler input (idempotent
+    // normalization) — the runtime matcher requires it either way.
     const rules = normalizeRouteRules({ "/x": { headers: { "x-a": "1" } } });
     const runtimeBase = createRouteRulesMatcher(rules, { baseURL: "/base/" });
     const code = compileFindRouteRules(rules, { baseURL: "/base/" });
@@ -77,20 +109,14 @@ describe("compiler parity", () => {
 
 describe("generated code shape", () => {
   it("references runtime handlers by name and skips data-only rules", () => {
-    const code = compileFindRouteRules(
-      normalizeRouteRules({
-        "/a/**": { redirect: "/b", prerender: true },
-      }),
-    );
+    const code = compileFindRouteRules({ "/a/**": { redirect: "/b", prerender: true } });
     expect(code).toContain("handler:__ruleHandlers__$redirect");
     expect(code).toContain('name:"prerender"');
     expect(code).not.toContain("handler:__ruleHandlers__$prerender");
   });
 
   it("serializes method scope", () => {
-    const code = compileFindRouteRules(
-      normalizeRouteRules({ "GET /a/**": { headers: { a: "1" } } }),
-    );
+    const code = compileFindRouteRules({ "GET /a/**": { headers: { a: "1" } } });
     expect(code).toContain('method:"GET"');
   });
 
@@ -100,38 +126,38 @@ describe("generated code shape", () => {
     // `compileHandlersImport` never imports (a ReferenceError in every real
     // consumer module). Pin set-equality between references and imports.
     for (const opts of [undefined, { preMerge: true }] as const) {
-      const rules = normalizeRouteRules(FIXTURE);
-      const code = compileFindRouteRules(rules, opts);
+      const code = compileFindRouteRules(FIXTURE, opts);
       const bindings = (source: string) =>
         [...new Set([...source.matchAll(/__ruleHandlers__\$(\w+)/g)].map((m) => m[1]!))].sort();
-      expect(bindings(code)).toEqual(bindings(compileHandlersImport(rules, opts)));
+      expect(bindings(code)).toEqual(bindings(compileHandlersImport(FIXTURE, opts)));
     }
   });
 
   it("imports exactly the handlers the rule set uses", () => {
-    const rules = normalizeRouteRules({
+    const rules: Record<string, RouteRuleConfig> = {
       "/a/**": { redirect: "/b", prerender: true },
       "/b/**": { headers: { a: "1" } },
       // `false` resets are serialized with their handler — they count as used.
       "/b/off": { basicAuth: false },
-    });
+    };
     expect(compileHandlersImport(rules)).toBe(
       'import { basicAuth as __ruleHandlers__$basicAuth, headers as __ruleHandlers__$headers, redirect as __ruleHandlers__$redirect } from "h3-rules";',
     );
   });
 
   it("emits no handlers import for data-only rule sets", () => {
-    const rules = normalizeRouteRules({ "/a": { prerender: true } });
+    const rules: Record<string, RouteRuleConfig> = { "/a": { prerender: true } };
     expect(compileHandlersImport(rules)).toBe("");
-    const mod = compileRouteRulesModule(rules);
-    expect(mod).not.toContain("import");
-    expect(mod.startsWith("export const findRouteRules = ")).toBe(true);
+    const mod = compileRouteRules(rules);
+    expect(mod.imports).toBe("");
+    expect(mod.code).not.toContain("import");
+    expect(mod.body.startsWith("export const findRouteRules = ")).toBe(true);
     const matcher = createMatcherFromFind(evaluateFind(compileFindRouteRules(rules)));
     expect(matcher("GET", "/a").routeRules.prerender!.options).toBe(true);
   });
 
   it("is parameterized on the handler binding prefix and per-rule source", () => {
-    const rules = normalizeRouteRules({ "/a": { redirect: "/b" } });
+    const rules: Record<string, RouteRuleConfig> = { "/a": { redirect: "/b" } };
     expect(compileHandlersImport(rules)).toBe(
       'import { redirect as __ruleHandlers__$redirect } from "h3-rules";',
     );
@@ -153,7 +179,7 @@ describe("generated code shape", () => {
   });
 
   it("supports custom runtime rule names via a bare-string source", () => {
-    const rules = normalizeRouteRules({ "/a": { shout: "x" } });
+    const rules: Record<string, RouteRuleConfig> = { "/a": { shout: "x" } };
     const opts = { runtimeRules: { shout: "h3-rules" } };
     expect(compileFindRouteRules(rules, opts)).toContain("handler:__ruleHandlers__$shout");
     expect(compileHandlersImport(rules, opts)).toBe(
@@ -165,7 +191,7 @@ describe("generated code shape", () => {
     // A custom rule handler living in its own module under a different export
     // name; `runtimeRules` only lists the addition, so the built-in `redirect`
     // stays registered on the h3-rules source via the merge.
-    const rules = normalizeRouteRules({ "/a/**": { redirect: "/b", isr: 60 } });
+    const rules: Record<string, RouteRuleConfig> = { "/a/**": { redirect: "/b", isr: 60 } };
     const opts = {
       runtimeRules: {
         isr: { source: "#nitro/rules", export: "handleISR" },
@@ -181,7 +207,9 @@ describe("generated code shape", () => {
   });
 
   it("overrides a built-in's source module (export defaults to the rule name)", () => {
-    const rules = normalizeRouteRules({ "/a/**": { cache: { maxAge: 60 }, headers: { a: "1" } } });
+    const rules: Record<string, RouteRuleConfig> = {
+      "/a/**": { cache: { maxAge: 60 }, headers: { a: "1" } },
+    };
     // Only `cache` is overridden; `headers` stays on h3-rules via the merge.
     const opts = { runtimeRules: { cache: "#nitro/cache" } };
     expect(compileHandlersImport(rules, opts)).toBe(
@@ -191,9 +219,9 @@ describe("generated code shape", () => {
   });
 
   it("groups multiple handlers sharing a source into one import statement", () => {
-    const rules = normalizeRouteRules({
+    const rules: Record<string, RouteRuleConfig> = {
       "/a/**": { redirect: "/b", isr: true, prerender: true },
-    });
+    };
     const opts = {
       runtimeRules: {
         redirect: "#nitro/rules",
@@ -208,15 +236,103 @@ describe("generated code shape", () => {
   });
 
   it("throws when a per-rule export is not a valid JS identifier", () => {
-    const rules = normalizeRouteRules({ "/a": { redirect: "/b" } });
+    const rules: Record<string, RouteRuleConfig> = { "/a": { redirect: "/b" } };
     const opts = { runtimeRules: { redirect: { source: "h3-rules", export: "not valid" } } };
     expect(() => compileHandlersImport(rules, opts)).toThrow(/valid JS identifier/);
   });
 
-  it("emits a complete module", () => {
-    const mod = compileRouteRulesModule(normalizeRouteRules({ "/a": { redirect: "/b" } }));
-    expect(mod).toContain('import { redirect as __ruleHandlers__$redirect } from "h3-rules";');
-    expect(mod).toContain("export const findRouteRules = ");
+  it("emits a complete module split into imports + body", () => {
+    const mod = compileRouteRules({ "/a": { redirect: "/b" } });
+    expect(mod.imports).toBe('import { redirect as __ruleHandlers__$redirect } from "h3-rules";');
+    expect(mod.body).toContain("export const findRouteRules = ");
+    // code (and `String(mod)`) is imports + body — the whole module.
+    expect(mod.code).toBe(`${mod.imports}\n${mod.body}`);
+    expect(`${mod}`).toBe(mod.code);
+  });
+
+  it("omits the matcher export by default", () => {
+    const mod = compileRouteRules({ "/a": { redirect: "/b" } });
+    expect(mod.imports).toBe('import { redirect as __ruleHandlers__$redirect } from "h3-rules";');
+    expect(mod.code).not.toContain("createMatcherFromFind");
+    expect(mod.code).not.toContain("export const matcher");
+  });
+
+  it("appends a createMatcherFromFind matcher export when requested", () => {
+    const mod = compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: true });
+    // Infra import joins the handler imports; matcher export follows findRouteRules.
+    expect(mod.imports).toBe(
+      'import { redirect as __ruleHandlers__$redirect } from "h3-rules";\n' +
+        'import { createMatcherFromFind } from "h3-rules";',
+    );
+    expect(mod.body).toContain("export const findRouteRules = ");
+    expect(mod.body.trimEnd()).toMatch(
+      /export const matcher = createMatcherFromFind\(findRouteRules\);$/,
+    );
+    expect(mod.code).toBe(`${mod.imports}\n${mod.body}`);
+  });
+
+  it("names the matcher export from a string / { name }", () => {
+    const fromString = compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: "routeMatcher" });
+    expect(fromString.body).toContain(
+      "export const routeMatcher = createMatcherFromFind(findRouteRules);",
+    );
+    const fromObject = compileRouteRules(
+      { "/a": { redirect: "/b" } },
+      { matcher: { name: "routeMatcher" } },
+    );
+    expect(fromObject.body).toContain(
+      "export const routeMatcher = createMatcherFromFind(findRouteRules);",
+    );
+  });
+
+  it("wraps in memoizeRouteRulesMatcher when memoize is set (and imports it only then)", () => {
+    const plain = compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: true });
+    expect(plain.imports).not.toContain("memoizeRouteRulesMatcher");
+
+    const memo = compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: { memoize: true } });
+    expect(memo.imports).toContain(
+      'import { createMatcherFromFind, memoizeRouteRulesMatcher } from "h3-rules";',
+    );
+    expect(memo.body).toContain(
+      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules));",
+    );
+  });
+
+  it("serializes a memoize { max } cap as the second argument", () => {
+    const mod = compileRouteRules(
+      { "/a": { redirect: "/b" } },
+      { matcher: { memoize: { max: 256 } } },
+    );
+    expect(mod.body).toContain(
+      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules), { max: 256 });",
+    );
+  });
+
+  it("emits the matcher export with no handler import for a data-only rule set", () => {
+    const mod = compileRouteRules({ "/a": { prerender: true } }, { matcher: true });
+    expect(mod.imports).toBe('import { createMatcherFromFind } from "h3-rules";');
+    expect(mod.body).toContain("export const matcher = createMatcherFromFind(findRouteRules);");
+  });
+
+  it("throws when the matcher export name is not a valid JS identifier", () => {
+    expect(() => compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: "not valid" })).toThrow(
+      /valid JS identifier/,
+    );
+    expect(() =>
+      compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: { name: "1bad" } }),
+    ).toThrow(/valid JS identifier/);
+  });
+
+  it("the generated matcher export resolves identically to the runtime matcher", () => {
+    const runtime = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
+    for (const matcher of [true, { memoize: true }, { memoize: { max: 8 } }] as const) {
+      const compiled = evaluateModule(compileRouteRules(FIXTURE, { matcher }));
+      for (const [method, pathname] of PROBES) {
+        expect(snapshotResult(compiled(method, pathname))).toEqual(
+          snapshotResult(runtime(method, pathname)),
+        );
+      }
+    }
   });
 
   it("default RUNTIME_RULE_NAMES matches the ruleHandlers registry", () => {
@@ -234,7 +350,9 @@ describe("generated code shape", () => {
   it("preMerge does not import handlers only referenced by resolved `false` resets", () => {
     // preMerge applies `false` resets at compile time, so they never appear in
     // (or reference a handler from) the generated entries.
-    const rules = normalizeRouteRules({ "/a/**": { basicAuth: false, headers: { a: "1" } } });
+    const rules: Record<string, RouteRuleConfig> = {
+      "/a/**": { basicAuth: false, headers: { a: "1" } },
+    };
     expect(compileHandlersImport(rules)).toBe(
       'import { basicAuth as __ruleHandlers__$basicAuth, headers as __ruleHandlers__$headers } from "h3-rules";',
     );
@@ -286,17 +404,17 @@ describe("fail-safe preMerge", () => {
     }
   });
 
-  it("compileRouteRulesModule warns once and emits a working plain module", () => {
+  it("compileRouteRules warns once and emits a working plain module", () => {
     const rules = normalizeRouteRules(NON_CHAIN_CLEAN);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const mod = compileRouteRulesModule(rules, { preMerge: true });
+      const mod = compileRouteRules(rules, { preMerge: true });
       // Resolved once up front, not once per sub-call.
       expect(warn).toHaveBeenCalledTimes(1);
       // Import and codegen agree: the module evaluates without a ReferenceError.
-      expect(mod).toContain("__ruleHandlers__$basicAuth");
-      const findSrc = mod
-        .slice(mod.indexOf("=") + 1)
+      expect(mod.code).toContain("__ruleHandlers__$basicAuth");
+      const findSrc = mod.body
+        .slice(mod.body.indexOf("=") + 1)
         .trim()
         .replace(/;\s*$/, "");
       const compiled = createMatcherFromFind(evaluateFind(findSrc));
@@ -312,45 +430,89 @@ describe("fail-safe preMerge", () => {
 
 describe("compile-time validation", () => {
   it("throws on function-valued options (silently dropped by JSON)", () => {
-    const rules = normalizeRouteRules({
-      "/api/**": { proxy: { to: "/upstream/**", onResponse: () => {} } },
-    });
-    expect(() => compileFindRouteRules(rules)).toThrow(/non-JSON-serializable.*onResponse/);
+    expect(() =>
+      compileFindRouteRules({
+        "/api/**": { proxy: { to: "/upstream/**", onResponse: () => {} } },
+      }),
+    ).toThrow(/non-JSON-serializable.*onResponse/);
   });
 
   it("throws on class instances that JSON mangles (Date, RegExp)", () => {
-    expect(() =>
-      compileFindRouteRules(normalizeRouteRules({ "/a": { custom: { at: new Date(0) } } })),
-    ).toThrow(/non-JSON-serializable.*Date/);
-    expect(() =>
-      compileFindRouteRules(normalizeRouteRules({ "/a": { custom: { pattern: /x/ } } })),
-    ).toThrow(/non-JSON-serializable.*RegExp/);
+    expect(() => compileFindRouteRules({ "/a": { custom: { at: new Date(0) } } })).toThrow(
+      /non-JSON-serializable.*Date/,
+    );
+    expect(() => compileFindRouteRules({ "/a": { custom: { pattern: /x/ } } })).toThrow(
+      /non-JSON-serializable.*RegExp/,
+    );
   });
 
   it("throws on nested undefined (silently dropped by JSON)", () => {
-    expect(() =>
-      compileFindRouteRules(normalizeRouteRules({ "/a": { custom: { a: undefined } } })),
-    ).toThrow(/non-JSON-serializable/);
+    expect(() => compileFindRouteRules({ "/a": { custom: { a: undefined } } })).toThrow(
+      /non-JSON-serializable/,
+    );
   });
 
   it("accepts JSON-safe options including `false` resets and null", () => {
-    const rules = normalizeRouteRules({
-      "/a/**": { cache: false, custom: { n: null, deep: [{ ok: true }] } },
-    });
-    expect(() => compileFindRouteRules(rules)).not.toThrow();
+    expect(() =>
+      compileFindRouteRules({
+        "/a/**": { cache: false, custom: { n: null, deep: [{ ok: true }] } },
+      }),
+    ).not.toThrow();
   });
 
   it("throws when a handler binding is not a valid JS identifier", () => {
     // Handler references bind as `<ns>$<name>` identifiers in generated code —
     // fail at compile time, not with a parse error in the consumer's module.
-    const rules = normalizeRouteRules({ "/a": { "my-rule": "x" } });
+    const rules: Record<string, RouteRuleConfig> = { "/a": { "my-rule": "x" } };
     const opts = { runtimeRules: { "my-rule": "h3-rules" } };
     expect(() => compileHandlersImport(rules, opts)).toThrow(/valid JS identifier/);
     expect(() => compileFindRouteRules(rules, opts)).toThrow(/valid JS identifier/);
     expect(() =>
-      compileFindRouteRules(normalizeRouteRules({ "/a": { redirect: "/b" } }), {
-        handlersImportName: "not valid",
-      }),
+      compileFindRouteRules({ "/a": { redirect: "/b" } }, { handlersImportName: "not valid" }),
     ).toThrow(/valid JS identifier/);
+  });
+
+  it("surfaces config-time validation (top-level arrays) at compile time", () => {
+    // Auto-normalization runs `normalizeRouteRules` inside the compiler, so its
+    // config validation lands in the build instead of at server boot.
+    expect(() => compileFindRouteRules({ "/a/**": { custom: [1, 2, 3] } })).toThrow(
+      /cannot be top-level arrays/,
+    );
+  });
+});
+
+describe("input normalization", () => {
+  // The compiler entrypoints normalize their input themselves (build-time, so
+  // the pass is free) — authored config with shortcuts must compile exactly
+  // like its normalized form, and already-normalized input must pass through
+  // unchanged (normalizeRouteRules is idempotent, pinned in normalize.test.ts).
+  const config: Record<string, RouteRuleConfig> = {
+    "/api/**": { swr: 60, cors: true },
+    "/old/**": { redirect: "/new/**" },
+  };
+
+  it("expands authored shortcuts (swr/cors/string redirect) before compiling", () => {
+    // Pre-auto-normalization, raw config here silently mis-compiled: `swr`
+    // is not a runtime rule name, so no cache handler was imported and the
+    // rule became data-only.
+    expect(compileHandlersImport(config)).toBe(
+      'import { cache as __ruleHandlers__$cache, headers as __ruleHandlers__$headers, redirect as __ruleHandlers__$redirect } from "h3-rules";',
+    );
+    const code = compileFindRouteRules(config);
+    expect(code).toContain('name:"cache"');
+    expect(code).not.toContain('name:"swr"');
+    expect(code).not.toContain('name:"cors"');
+    const matcher = createMatcherFromFind(evaluateFind(code));
+    expect(matcher("GET", "/old/x").routeRules.redirect!.options).toEqual({
+      to: "/new/**",
+      status: 307,
+      base: "/old",
+    });
+  });
+
+  it("compiles authored and pre-normalized input to identical output", () => {
+    expect(compileRouteRules(normalizeRouteRules(config)).code).toBe(
+      compileRouteRules(config).code,
+    );
   });
 });

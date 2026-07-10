@@ -8,20 +8,32 @@
 //   (rou3 router built at startup). `preMerge` is a flag on the same code, so
 //   its bundle is identical.
 // - compiled: `h3-rules/compiler` codegen output (rules baked into a generated
-//   module) + `createMatcherFromFind`. No rou3 router in the bundle, and only
+//   module, pre-merged) + `createMatcherFromFind`. No rou3 router in the bundle, and only
 //   the used handler + its deps are imported — so the compiled column shows each
 //   rule's true tree-shaken footprint (cache→ocache, redirect/proxy→ufo, and
 //   headers/cors/basicAuth ship no extra deps).
 //
 // The per-dep columns (rou3/ocache/ufo) are the bytes each package contributes
-// to that bundle. Bundles are minified ESM with `h3` external (a peer dependency
-// the host app ships either way). Entries are generated into bench/.generated/.
+// to that bundle. Measured bundles are minified ESM with `h3` external (a peer
+// dependency the host app ships either way).
+//
+// Everything is written to bench/.generated/rules/<rule>/ for inspection.
+// Each mode inlines its rules straight into the one entry file — runtime as
+// JSON, compiled as the whole `compileRouteRules(..., { matcher: true })` module
+// (handler imports + `findRouteRules` + the `createMatcherFromFind` export):
+//
+// - <mode>.entry.mjs                    — the bundled entry point
+// - <mode>.bundle.mjs                   — readable bundle: h3 + ocache external,
+//                                         unminified for reading
+//
+// The measured bundle (minified, h3 external) is built in memory only — we just
+// need its byte size — and is not written to disk.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { build } from "esbuild";
-import { compileRouteRulesModule } from "../src/compiler.ts";
+import { compileRouteRules } from "../src/compiler.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { RULE_BENCHES } from "./rules.ts";
 
@@ -31,21 +43,29 @@ const srcIndex = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 // External deps whose per-bundle contribution the table breaks out.
 const DEPS = ["rou3", "ocache", "ufo"];
 
-// Build the runtime + compiled entry files for one rule spec. `slug` namespaces
-// the generated files so specs don't collide in bench/.generated/.
+// Build the runtime + compiled entry files for one rule spec. Each spec gets
+// its own `rules/<name>/` directory under bench/.generated/.
 function variantsFor(spec) {
-  const slug = spec.name;
+  const dir = `rules/${spec.name}/`;
   const normalized = normalizeRouteRules(spec.rules);
+  // preMerge: the shipping-mode pairing — compiled sets are static, so they can
+  // always pre-merge (bench sets are chain-clean by construction). `matcher:
+  // true` folds the `createMatcherFromFind(findRouteRules)` wrapper into the
+  // generated module, so `compiled.code` is a complete, directly-usable entry —
+  // exactly what a consumer ships.
+  const compiled = compileRouteRules(normalized, { preMerge: true, matcher: true });
   return [
     {
       rule: spec.name,
       mode: "runtime",
-      entry: `entry-${slug}-runtime.mjs`,
+      dir,
+      entry: `${dir}runtime.entry.mjs`,
       files: {
-        [`rules-${slug}.data.mjs`]: `export const rules = ${JSON.stringify(spec.rules)};\n`,
-        [`entry-${slug}-runtime.mjs`]: [
+        // Rules inlined as JSON (they're serializable) — the entry is the whole
+        // runtime input.
+        [`${dir}runtime.entry.mjs`]: [
           `import { createRouteRulesMatcher, normalizeRouteRules } from "h3-rules";`,
-          `import { rules } from "./rules-${slug}.data.mjs";`,
+          `const rules = ${JSON.stringify(spec.rules)};`,
           `export const matcher = createRouteRulesMatcher(normalizeRouteRules(rules));`,
           ``,
         ].join("\n"),
@@ -54,35 +74,50 @@ function variantsFor(spec) {
     {
       rule: spec.name,
       mode: "compiled",
-      entry: `entry-${slug}-compiled.mjs`,
+      dir,
+      entry: `${dir}compiled.entry.mjs`,
       files: {
-        [`rules-${slug}.compiled.mjs`]: compileRouteRulesModule(normalized),
-        [`entry-${slug}-compiled.mjs`]: [
-          `import { createMatcherFromFind } from "h3-rules";`,
-          `import { findRouteRules } from "./rules-${slug}.compiled.mjs";`,
-          `export const matcher = createMatcherFromFind(findRouteRules);`,
-          ``,
-        ].join("\n"),
+        // `matcher: true` makes the codegen a complete module (handler imports +
+        // `findRouteRules` + the `createMatcherFromFind` matcher export), so the
+        // whole entry is just `compiled.code`.
+        [`${dir}compiled.entry.mjs`]: compiled.code,
       },
     },
   ];
 }
 
 async function measure(variant) {
-  const result = await build({
+  const shared = {
     entryPoints: [genDir + variant.entry],
     bundle: true,
     format: "esm",
     platform: "neutral",
-    minify: true,
     write: false,
     metafile: true,
-    external: ["h3"],
     alias: { "h3-rules": srcIndex },
     logLevel: "silent",
+  };
+  // Measured bundle: what the table reports — minified, `h3` external. ocache
+  // stays inlined here so the table's ocache column can measure it. Kept
+  // in-memory only (we just need its size); not written to disk.
+  const measured = await build({ ...shared, minify: true, external: ["h3"] });
+  // Readable bundle: unminified with h3 + ocache external, so the shipped
+  // h3-rules code can be read directly. Not what the table measures — this is
+  // the one written to disk, for inspection.
+  const readable = await build({
+    ...shared,
+    minify: false,
+    external: ["h3", "ocache"],
+    banner: {
+      js: `// ${variant.rule} (${variant.mode}) — readable bundle: h3 + ocache external, unminified.`,
+    },
   });
-  const output = result.outputFiles[0].contents;
-  const inputs = Object.values(result.metafile.outputs)[0].inputs;
+  const output = measured.outputFiles[0].contents;
+  await writeFile(
+    `${genDir}${variant.dir}${variant.mode}.bundle.mjs`,
+    readable.outputFiles[0].contents,
+  );
+  const inputs = Object.values(measured.metafile.outputs)[0].inputs;
   const sum = (test) =>
     Object.entries(inputs)
       .filter(([file]) => test(file))
@@ -122,8 +157,10 @@ const depCell = (bytes) => (bytes ? kB(bytes) : "-");
 
 const variants = RULE_BENCHES.flatMap(variantsFor);
 
-await mkdir(genDir, { recursive: true });
+// Regenerate from scratch so renamed/removed rules leave no stale files behind.
+await rm(genDir, { recursive: true, force: true });
 for (const variant of variants) {
+  await mkdir(genDir + variant.dir, { recursive: true });
   for (const [name, contents] of Object.entries(variant.files)) {
     await writeFile(genDir + name, contents);
   }
@@ -146,5 +183,8 @@ console.log(
 console.log(
   `\nrou3/ocache/ufo = bytes each package contributes to that bundle ("-" = tree-shaken out).` +
     `\ncompiled mode drops the rou3 router and imports only the used handler + its deps.` +
-    `\nruntime +preMerge shares the runtime bundle (flag only). Entries: bench/.generated/`,
+    `\nruntime +preMerge shares the runtime bundle (flag only).` +
+    `\nbench/.generated/rules/<rule>/ has entries and readable bundles` +
+    `\n(*.bundle.mjs, h3 + ocache external, unminified); the measured minified` +
+    `\nbundle is sized in memory and not written.`,
 );

@@ -1,6 +1,5 @@
-import { H3 } from "h3";
+import { callMiddleware, H3 } from "h3";
 import { describe, expect, it, vi } from "vitest";
-import { routeRules } from "../src/h3.ts";
 import {
   createMatcherFromFind,
   createRouteRulesMatcher,
@@ -20,7 +19,7 @@ const RULES: Record<string, RouteRuleConfig> = {
 describe("memoizeRouteRulesMatcher", () => {
   it("returns results identical to the unmemoized matcher", () => {
     const plain = createRouteRulesMatcher(normalizeRouteRules(RULES));
-    const memoized = createRouteRulesMatcher(normalizeRouteRules(RULES), { memoize: true });
+    const memoized = memoizeRouteRulesMatcher(createRouteRulesMatcher(normalizeRouteRules(RULES)));
     for (const [method, path] of [
       ["GET", "/api/users/42"],
       ["GET", "/api/users/42"], // repeat (memo hit)
@@ -43,7 +42,7 @@ describe("memoizeRouteRulesMatcher", () => {
 
   it("resolves each method + pathname only once", () => {
     const find = vi.fn(() => [] as RouteRuleLayer[]);
-    const matcher = createMatcherFromFind(find, { memoize: true });
+    const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(find));
     matcher("GET", "/a");
     matcher("GET", "/a");
     matcher("GET", "/a");
@@ -69,7 +68,7 @@ describe("memoizeRouteRulesMatcher", () => {
       ["/x/off/a", "/x/off%2fa"],
       ["/x/off%2fa", "/x/off/a"],
     ]) {
-      const memoized = createRouteRulesMatcher(rules, { memoize: true });
+      const memoized = memoizeRouteRulesMatcher(createRouteRulesMatcher(rules));
       for (const path of order) memoized("GET", path);
       expect(memoized("GET", "/x/off/a").routeRules.basicAuth).toBeUndefined();
       expect(memoized("GET", "/x/off%2fa").routeRules.basicAuth).toBeDefined();
@@ -77,7 +76,7 @@ describe("memoizeRouteRulesMatcher", () => {
   });
 
   it("returns the same result object for repeat requests (shared)", () => {
-    const matcher = createRouteRulesMatcher(normalizeRouteRules(RULES), { memoize: true });
+    const matcher = memoizeRouteRulesMatcher(createRouteRulesMatcher(normalizeRouteRules(RULES)));
     expect(matcher("GET", "/api/x")).toBe(matcher("GET", "/api/x"));
   });
 
@@ -124,9 +123,16 @@ describe("memoizeRouteRulesMatcher", () => {
     }
   });
 
-  it("works end-to-end through routeRules() with memoize enabled", async () => {
+  it("works end-to-end with a memoized matcher composed into middleware", async () => {
     const app = new H3();
-    app.use(routeRules(RULES, { memoize: true }));
+    const matcher = memoizeRouteRulesMatcher(createRouteRulesMatcher(normalizeRouteRules(RULES)));
+    app.use((event, next) => {
+      const { routeRules, routeRuleMiddleware } = matcher(event.req.method, event.url.pathname);
+      event.context.routeRules = routeRules;
+      return routeRuleMiddleware.length > 0
+        ? callMiddleware(event, routeRuleMiddleware, () => next())
+        : next();
+    });
     app.get("/api/:section/:id", (event) => ({
       params: event.context.routeRules?.custom?.params,
     }));

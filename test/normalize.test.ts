@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseRouteKey } from "../src/internal/key.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
+import type { RouteRuleConfig } from "../src/types.ts";
+import { FIXTURE } from "./_fixture.ts";
 
 // Ported verbatim from Nitro test/unit/route-rules.test.ts
 describe("normalizeRouteRules - swr", () => {
@@ -207,6 +209,34 @@ describe("route key parsing", () => {
   it("method-scoped normalization applies to the path part", () => {
     const rules = normalizeRouteRules({ "GET /old/**": { redirect: "/new/**" } });
     expect(rules["GET /old/**"]!.redirect).toEqual({ to: "/new/**", status: 307, base: "/old" });
+  });
+});
+
+describe("normalizeRouteRules - idempotency", () => {
+  // Contract, not an accident: the compiler entrypoints normalize their input
+  // themselves, and consumers may hand them an already-normalized rule set —
+  // a second pass must be a no-op (shortcut keys are consumed by the first
+  // pass; defaults, canonical keys, and `base` recompute to the same values).
+  // If a future normalization step cannot re-apply cleanly, the compiler's
+  // auto-normalization needs a redesign — do not just delete this test.
+  it("re-normalizing a normalized rule set is a no-op", () => {
+    const once = normalizeRouteRules(FIXTURE);
+    const twice = normalizeRouteRules(once as Record<string, RouteRuleConfig>);
+    expect(twice).toEqual(once);
+  });
+
+  it("re-normalizing preserves reset markers and shortcut expansions", () => {
+    const once = normalizeRouteRules({
+      "/swr/**": { swr: 60 },
+      "/off/**": { swr: false },
+      "/cors/**": { cors: true },
+      "/old/**": { redirect: "/new/**" },
+      "/api/**": { proxy: { to: "https://example.com/**", headers: { "x-p": "1" } } },
+    });
+    const twice = normalizeRouteRules(once as Record<string, RouteRuleConfig>);
+    expect(twice).toEqual(once);
+    expect(twice["/off/**"]!.cache).toBe(false);
+    expect(twice["/old/**"]!.redirect).toEqual({ to: "/new/**", status: 307, base: "/old" });
   });
 });
 

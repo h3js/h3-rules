@@ -1,5 +1,9 @@
 import { compileFindRouteRules } from "../src/compiler.ts";
-import { createMatcherFromFind, createRouteRulesMatcher } from "../src/match.ts";
+import {
+  createMatcherFromFind,
+  createRouteRulesMatcher,
+  memoizeRouteRulesMatcher,
+} from "../src/match.ts";
 import type { FindRouteRules, RouteRulesMatcher } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
@@ -43,11 +47,15 @@ export function createBenchMatchers(): BenchVariant[] {
       variants.push(
         {
           name: `runtime${suffix}`,
-          matcher: createRouteRulesMatcher(normalized, { preMerge, memoize }),
+          matcher: memoize
+            ? memoizeRouteRulesMatcher(createRouteRulesMatcher(normalized, { preMerge }))
+            : createRouteRulesMatcher(normalized, { preMerge }),
         },
         {
           name: `compiled${suffix}`,
-          matcher: createMatcherFromFind(evalCompiledFind(code), { memoize }),
+          matcher: memoize
+            ? memoizeRouteRulesMatcher(createMatcherFromFind(evalCompiledFind(code)))
+            : createMatcherFromFind(evalCompiledFind(code)),
         },
       );
     }
