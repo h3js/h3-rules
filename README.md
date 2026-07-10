@@ -121,20 +121,20 @@ At runtime, wrap it with `createMatcherFromFind(findRouteRules)` (optionally wit
 
 The generated module imports **only the rule handlers the rule set uses** — each built-in is a named export of `h3-rules` (`headers`, `redirect`, `proxy`, `cache`, `basicAuth`), so unused handlers and their dependencies (rou3's matcher always, ocache/ufo when `cache`/`redirect`/`proxy` are unused) tree-shake out of the bundle.
 
-Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the handler is that module's export under the rule name) or `{ source, export }` to also override the export name. It defaults to `DEFAULT_RUNTIME_RULES` (every built-in from `h3-rules`); spread it to register a **custom** rule handler or repoint a built-in at your own module. Handlers sharing a source collapse into one import statement:
+Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the module must export a member named exactly as the rule key, e.g. `cache: "#nitro/cache"` imports `cache`) or `{ source, export }` when the export is named something else. It is merged **over** the built-in preset (`DEFAULT_RUNTIME_RULES`, every built-in from `h3-rules`), so you only list what you add or change — the built-ins stay registered. Handlers sharing a source collapse into one import statement:
 
 ```ts
-import { compileRouteRulesModule, DEFAULT_RUNTIME_RULES } from "h3-rules/compiler";
+import { compileRouteRulesModule } from "h3-rules/compiler";
 
 compileRouteRulesModule(normalizeRouteRules(config), {
   runtimeRules: {
-    ...DEFAULT_RUNTIME_RULES,
-    cache: "#nitro/cache", // built-in cache from your own module
+    cache: "#nitro/cache", // repoint the built-in cache at your own module
     isr: { source: "#nitro/rules", export: "handleISR" }, // custom rule + export
   },
 });
 // -> import { handleISR as __ruleHandlers__$isr } from "#nitro/rules";
 // -> import { cache as __ruleHandlers__$cache } from "#nitro/cache";
+// (redirect, headers, … still import from "h3-rules" when used)
 ```
 
 A custom `cache` handler can be built with `createCacheRuleHandler(opts)`.

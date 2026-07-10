@@ -91,7 +91,7 @@ export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"ca
  * memoization is module-scoped. Runtime matchers replace it with an
  * instance-scoped handler (see `createRouteRulesMatcher`); compiled consumers
  * needing custom wiring point their own `createCacheRuleHandler(opts)` instance
- * at the `cache` handler via the compiler's `runtimeRules` preset
- * (`{ ...DEFAULT_RUNTIME_RULES, cache: "#your/cache" }`).
+ * at the `cache` handler via the compiler's `runtimeRules` override
+ * (`{ cache: "#your/cache" }`, merged over the built-in preset).
  */
 export const cache: RuleHandler<"cache"> = /* @__PURE__ */ createCacheRuleHandler();

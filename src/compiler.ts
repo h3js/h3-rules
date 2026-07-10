@@ -19,15 +19,17 @@ export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
 
 /**
  * Where a runtime rule's handler is imported from in generated code: either a
- * bare module id (the handler is that module's named export under the rule
- * name) or `{ source, export }` to also override the export name. The `source`
- * is always explicit — there is no ambient default module.
+ * bare module id or `{ source, export }`. With the bare-string form the
+ * `source` module **must have a named export whose identifier equals the rule
+ * key** (`cache: "#nitro/cache"` ⇒ `import { cache } from "#nitro/cache"`); use
+ * the object form's `export` when the export is named something else. The
+ * `source` is always explicit — there is no ambient default module.
  *
  * ```ts
+ * // merged over the built-in preset — only list additions/overrides:
  * runtimeRules: {
- *   ...DEFAULT_RUNTIME_RULES,                              // built-ins from "h3-rules"
- *   cache: "#nitro/cache",                                 // built-in, other module
- *   isr: { source: "#nitro/rules", export: "handleISR" },  // custom rule + export
+ *   cache: "#nitro/cache",                                 // module exports `cache`
+ *   isr: { source: "#nitro/rules", export: "handleISR" },  // export named differently
  * }
  * ```
  */
@@ -37,21 +39,38 @@ export interface RuntimeRuleImportSpec {
   /** Module the handler is imported from. */
   source: string;
   /**
-   * Named export within `source`. Must be a valid JS identifier (it becomes an
-   * import binding in generated code).
-   * @default the rule name
+   * Named export of the handler within `source`. Must be a valid JS identifier
+   * (it becomes an import binding in generated code). Omit it only when the
+   * export is named exactly as the rule key — the default is the rule key
+   * itself, so `source` must then export a member under that name.
+   * @default the rule key
    */
   export?: string;
 }
 
 /**
  * Default `runtimeRules` preset: every built-in rule handler imported from
- * `h3-rules` under its own name. Spread it to add custom rules or override a
- * built-in's source (`{ ...DEFAULT_RUNTIME_RULES, isr: "#nitro/rules" }`).
+ * `h3-rules` under its own name. A caller's `runtimeRules` is merged **over**
+ * this (see {@link resolveRuntimeRules}), so consumers only list additions and
+ * overrides — they never need to re-declare the built-ins.
  */
 export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze(
   Object.fromEntries(RUNTIME_RULE_NAMES.map((name) => [name, "h3-rules"])),
 );
+
+/**
+ * The effective runtime-rule set: the caller's `runtimeRules` merged over
+ * {@link DEFAULT_RUNTIME_RULES}, so the built-ins stay registered unless the
+ * caller overrides a specific one. (Returns the frozen preset directly when the
+ * caller passes nothing, avoiding a per-call allocation.)
+ */
+function resolveRuntimeRules(
+  opts: CompileRouteRulesOptions,
+): Readonly<Record<string, RuntimeRuleImport>> {
+  return opts.runtimeRules
+    ? { ...DEFAULT_RUNTIME_RULES, ...opts.runtimeRules }
+    : DEFAULT_RUNTIME_RULES;
+}
 
 /** Whether `name` is registered as a runtime rule (own key of the `runtimeRules` record). */
 function isRuntimeRule(name: string, runtimeRules: Record<string, RuntimeRuleImport>): boolean {
@@ -86,10 +105,10 @@ export interface CompileRouteRulesOptions {
   /**
    * Runtime rules that reference a handler (bound `<ns>$<name>`) in generated
    * code, keyed by rule name. Each value is a {@link RuntimeRuleImport} — a
-   * module id, or `{ source, export }`. Spread {@link DEFAULT_RUNTIME_RULES} to
-   * extend the built-ins with custom handlers or override a built-in's source.
-   * Keys bind as JS identifiers in generated code, so they must be valid
-   * identifiers.
+   * module id, or `{ source, export }`. Merged **over**
+   * {@link DEFAULT_RUNTIME_RULES}, so you only list custom handlers and
+   * built-in source overrides; the built-ins stay registered otherwise. Keys
+   * bind as JS identifiers in generated code, so they must be valid identifiers.
    * @default DEFAULT_RUNTIME_RULES
    */
   runtimeRules?: Record<string, RuntimeRuleImport>;
@@ -132,7 +151,7 @@ export function compileFindRouteRules(
   // resolved identically in compileHandlersImport so imports and references
   // stay in sync.
   const router = createRulesRouter(rules, {}, opts.baseURL, resolveEffectivePreMerge(rules, opts));
-  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
+  const runtimeRules = resolveRuntimeRules(opts);
   const ns = opts.handlersImportName || "__ruleHandlers__";
   assertHandlerBinding(ns, "handlersImportName");
   return compileRouterToString(router, undefined, {
@@ -156,7 +175,7 @@ function usedRuleHandlerNames(
   opts: CompileRouteRulesOptions = {},
   preMerge = false,
 ): string[] {
-  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
+  const runtimeRules = resolveRuntimeRules(opts);
   const used = new Set<string>();
   for (const key in rules) {
     for (const [name, options] of Object.entries(rules[key]!)) {
@@ -190,7 +209,7 @@ export function compileHandlersImport(
   opts: CompileRouteRulesOptions = {},
 ): string {
   const ns = opts.handlersImportName || "__ruleHandlers__";
-  const runtimeRules = opts.runtimeRules || DEFAULT_RUNTIME_RULES;
+  const runtimeRules = resolveRuntimeRules(opts);
   // Resolve preMerge the same way compileFindRouteRules does so a fallen-back
   // compile imports exactly the handlers its generated code references.
   const names = usedRuleHandlerNames(rules, opts, resolveEffectivePreMerge(rules, opts));

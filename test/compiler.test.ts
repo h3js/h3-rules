@@ -163,11 +163,11 @@ describe("generated code shape", () => {
 
   it("sources a rule handler from a per-rule { source, export } override", () => {
     // A custom rule handler living in its own module under a different export
-    // name, alongside a built-in kept on the h3-rules source via the preset.
+    // name; `runtimeRules` only lists the addition, so the built-in `redirect`
+    // stays registered on the h3-rules source via the merge.
     const rules = normalizeRouteRules({ "/a/**": { redirect: "/b", isr: 60 } });
     const opts = {
       runtimeRules: {
-        ...DEFAULT_RUNTIME_RULES,
         isr: { source: "#nitro/rules", export: "handleISR" },
       },
     };
@@ -182,7 +182,8 @@ describe("generated code shape", () => {
 
   it("overrides a built-in's source module (export defaults to the rule name)", () => {
     const rules = normalizeRouteRules({ "/a/**": { cache: { maxAge: 60 }, headers: { a: "1" } } });
-    const opts = { runtimeRules: { ...DEFAULT_RUNTIME_RULES, cache: "#nitro/cache" } };
+    // Only `cache` is overridden; `headers` stays on h3-rules via the merge.
+    const opts = { runtimeRules: { cache: "#nitro/cache" } };
     expect(compileHandlersImport(rules, opts)).toBe(
       'import { cache as __ruleHandlers__$cache } from "#nitro/cache";\n' +
         'import { headers as __ruleHandlers__$headers } from "h3-rules";',
