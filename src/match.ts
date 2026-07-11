@@ -22,8 +22,9 @@ export interface RouteRulesMatcherOptions {
   baseURL?: string;
   /**
    * Add or override rule handler constructors by name.
-   * Built-ins (`headers`, `redirect`, `proxy`, `cache`, `basicAuth`) are registry defaults.
-   * setting a name to `undefined` makes that rule data-only.
+   * Registry defaults are `headers`, `redirect`, `basicAuth`; `cache` and
+   * `proxy` are opt-in (register them from `h3-rules/cache` / `h3-rules/proxy`).
+   * Setting a name to `undefined` makes that rule data-only.
    */
   handlers?: RuleHandlers;
   /**
@@ -123,26 +124,32 @@ export function createRouteRulesMatcher(
   rules: Record<string, RouteRules>,
   opts?: RouteRulesMatcherOptions,
 ): RouteRulesMatcher {
-  // Default rule handler registry. There is no default `cache` handler — the
-  // caching implementation is not a core dependency. A rule set that uses
-  // `cache` (or the `swr` shortcut) without a registered handler would
-  // silently degrade to a data-only rule, so fail loudly at construction
-  // instead; an explicit `handlers: { cache: undefined }` opts into data-only.
+  // Default rule handler registry. `cache` and `proxy` have no default handler —
+  // each is an opt-in subpath export (`h3-rules/cache` / `h3-rules/proxy`) so its
+  // dependency stays out of bundles that don't use it. A rule set that uses one
+  // without a registered handler would silently degrade to a data-only rule, so
+  // fail loudly at construction; an explicit `handlers: { <name>: undefined }`
+  // opts into data-only.
   const handlers = {
     ...ruleHandlers,
     ...opts?.handlers,
   };
-  if (!("cache" in handlers)) {
-    for (const key in rules) {
-      if (rules[key]!.cache) {
-        throw new Error(
-          `[h3-rules] rules use \`cache\`/\`swr\` (\`${key}\`) but no \`cache\` handler is registered. ` +
-            `Install \`ocache\` and pass \`handlers: { cache }\` from "h3-rules/cache", provide your own ` +
-            `via \`createCacheRuleHandler\`, or pass \`handlers: { cache: undefined }\` to keep the rule data-only.`,
-        );
-      }
-    }
-  }
+  requireOptInHandler(
+    rules,
+    handlers,
+    "cache",
+    "cache`/`swr",
+    'Install `ocache` and pass `handlers: { cache }` from "h3-rules/cache", provide your own ' +
+      "via `createCacheRuleHandler`, or pass `handlers: { cache: undefined }` to keep the rule data-only.",
+  );
+  requireOptInHandler(
+    rules,
+    handlers,
+    "proxy",
+    "proxy",
+    'Pass `handlers: { proxy }` from "h3-rules/proxy", or `handlers: { proxy: undefined }` ' +
+      "to keep the rule data-only.",
+  );
 
   const router = createRulesRouter(rules, handlers, opts?.baseURL, opts?.preMerge);
 
@@ -257,6 +264,30 @@ export function memoizeRouteRulesMatcher(
 // ------------------------------------------------------------------------
 // Internal
 // ------------------------------------------------------------------------
+
+// Fail loudly when a rule set uses an opt-in rule (`cache`/`proxy`) but no
+// handler for it is registered — otherwise the rule would silently degrade to a
+// data-only rule (no caching / no proxying). A `false` reset is falsy, so a rule
+// set whose only values are resets does not throw; an own `<name>` key in
+// `handlers` (including `undefined`) opts out of the check.
+function requireOptInHandler(
+  rules: Record<string, RouteRules>,
+  handlers: RuleHandlers,
+  name: string,
+  label: string,
+  hint: string,
+): void {
+  if (name in handlers) {
+    return;
+  }
+  for (const key in rules) {
+    if (rules[key]![name]) {
+      throw new Error(
+        `[h3-rules] rules use \`${label}\` (\`${key}\`) but no \`${name}\` handler is registered. ${hint}`,
+      );
+    }
+  }
+}
 
 // Sort weight for a handler's `order` (lower runs first): a `number` is used
 // as-is, `"pre"` is -1, `"post"` is 1, and the default (omitted / data-only

@@ -40,6 +40,7 @@ import { RULE_BENCHES } from "./rules.ts";
 const genDir = fileURLToPath(new URL("./.generated/", import.meta.url));
 const srcIndex = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const srcCache = fileURLToPath(new URL("../src/cache.ts", import.meta.url));
+const srcProxy = fileURLToPath(new URL("../src/proxy.ts", import.meta.url));
 
 // External deps whose per-bundle contribution the table breaks out.
 const DEPS = ["rou3", "ocache", "ufo"];
@@ -49,10 +50,22 @@ const DEPS = ["rou3", "ocache", "ufo"];
 function variantsFor(spec) {
   const dir = `rules/${spec.name}/`;
   const normalized = normalizeRouteRules(spec.rules);
-  // Cache rules need the ocache-backed handler from `h3-rules/cache` — the
-  // core registry ships none (ocache is an optional peer, out of every other
-  // bundle). This is exactly what a consumer writes.
+  // `cache`/`proxy` are opt-in subpath handlers — the core registry ships
+  // neither (ocache is an optional peer; h3's `proxyRequest` stays out of
+  // non-proxying bundles), so a runtime consumer registers them explicitly. This
+  // is exactly what a consumer writes.
   const usesCache = Object.values(normalized).some((rule) => rule.cache !== undefined);
+  const usesProxy = Object.values(normalized).some((rule) => rule.proxy !== undefined);
+  // Opt-in handler imports + the `handlers: { … }` registration for the runtime
+  // entry (empty when the rule uses neither).
+  const optIn = [
+    ...(usesCache ? [{ name: "cache", from: "h3-rules/cache" }] : []),
+    ...(usesProxy ? [{ name: "proxy", from: "h3-rules/proxy" }] : []),
+  ];
+  const optInImports = optIn.map(({ name, from }) => `import { ${name} } from "${from}";`);
+  const optInHandlers = optIn.length
+    ? `, { handlers: { ${optIn.map(({ name }) => name).join(", ")} } }`
+    : "";
   // preMerge: the shipping-mode pairing — compiled sets are static, so they can
   // always pre-merge (bench sets are chain-clean by construction). `matcher:
   // true` folds the `createMatcherFromFind(findRouteRules)` wrapper into the
@@ -70,11 +83,9 @@ function variantsFor(spec) {
         // runtime input.
         [`${dir}runtime.entry.mjs`]: [
           `import { createRouteRulesMatcher, normalizeRouteRules } from "h3-rules";`,
-          ...(usesCache ? [`import { cache } from "h3-rules/cache";`] : []),
+          ...optInImports,
           `const rules = ${JSON.stringify(spec.rules)};`,
-          `export const matcher = createRouteRulesMatcher(normalizeRouteRules(rules)${
-            usesCache ? ", { handlers: { cache } }" : ""
-          });`,
+          `export const matcher = createRouteRulesMatcher(normalizeRouteRules(rules)${optInHandlers});`,
           ``,
         ].join("\n"),
       },
@@ -102,7 +113,7 @@ async function measure(variant) {
     platform: "neutral",
     write: false,
     metafile: true,
-    alias: { "h3-rules": srcIndex, "h3-rules/cache": srcCache },
+    alias: { "h3-rules": srcIndex, "h3-rules/cache": srcCache, "h3-rules/proxy": srcProxy },
     logLevel: "silent",
   };
   // Measured bundle: what the table reports — minified, `h3` external (ocache

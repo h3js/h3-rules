@@ -1,8 +1,9 @@
 /**
  * Rule names with a runtime handler in `h3-rules`. Data-only / custom rules are
  * serialized without a `handler` reference. Keep in sync with `ruleHandlers`
- * (src/rules/index.ts) — plus `cache`, whose handler is the `h3-rules/cache`
- * subpath export rather than a registry entry.
+ * (src/rules/index.ts) — plus the opt-in subpath handlers `cache`
+ * (`h3-rules/cache`) and `proxy` (`h3-rules/proxy`), which are runtime rules but
+ * not registry entries (see {@link SUBPATH_RULE_SOURCES}).
  */
 export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
   "headers",
@@ -11,6 +12,17 @@ export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
   "cache",
   "basicAuth",
 ]);
+
+/**
+ * Built-in rules whose handler is not exported from the `h3-rules` entry but
+ * from a dedicated subpath, so its dependency (ocache for `cache`, h3's
+ * `proxyRequest` for `proxy`) only enters a compiled bundle when the rule is
+ * used. Every other built-in imports from `h3-rules`.
+ */
+export const SUBPATH_RULE_SOURCES: Readonly<Record<string, string>> = Object.freeze({
+  cache: "h3-rules/cache",
+  proxy: "h3-rules/proxy",
+});
 
 /**
  * Where a runtime rule's handler is imported from in generated code: either a
@@ -45,16 +57,16 @@ export interface RuntimeRuleImportSpec {
 
 /**
  * Default `runtimeRules` preset: every built-in rule handler imported from
- * `h3-rules` under its own name — except `cache`, whose ocache-backed handler
- * lives in the `h3-rules/cache` subpath (so ocache, an optional peer, only
- * enters a compiled bundle when a cache rule is used). A caller's
- * `runtimeRules` is merged **over** this (see {@link resolveRuntimeRules}), so
- * consumers only list additions and overrides — they never need to re-declare
- * the built-ins.
+ * `h3-rules` under its own name — except the opt-in subpath handlers `cache`
+ * (`h3-rules/cache`) and `proxy` (`h3-rules/proxy`), so their dependencies
+ * (ocache, h3's `proxyRequest`) only enter a compiled bundle when the rule is
+ * used (see {@link SUBPATH_RULE_SOURCES}). A caller's `runtimeRules` is merged
+ * **over** this (see {@link resolveRuntimeRules}), so consumers only list
+ * additions and overrides — they never need to re-declare the built-ins.
  */
 export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze(
   Object.fromEntries(
-    RUNTIME_RULE_NAMES.map((name) => [name, name === "cache" ? "h3-rules/cache" : "h3-rules"]),
+    RUNTIME_RULE_NAMES.map((name) => [name, SUBPATH_RULE_SOURCES[name] ?? "h3-rules"]),
   ),
 );
 

@@ -3,7 +3,7 @@ import type { RouteRuleConfig } from "../src/types.ts";
 /**
  * Per-built-in-rule bench spec: a minimal rule set exercising exactly one
  * built-in rule handler, plus a hot probe that matches it. Shared by the RPS
- * bench (`bench/match.bench.ts`) and the bundle-size bench
+ * bench (`bench/match.mjs`) and the bundle-size bench
  * (`bench/bundle-size.mjs`) so both report the same per-rule breakdown and the
  * two benches cannot drift on which rules exist.
  *
@@ -11,9 +11,11 @@ import type { RouteRuleConfig } from "../src/types.ts";
  * pre-merge) and JSON-serializable (the bundle bench compiles + embeds it).
  * `deps` names the external runtime packages the handler pulls in, so the
  * bundle table's per-dep columns can be read against expectations:
- * `cache`→ocache (via the `h3-rules/cache` handler; ocache is an optional
- * peer), `redirect`/`proxy`→ufo, and `headers`/`cors`/`basicAuth` ship no
- * extra deps (h3 is an external peer either way).
+ * `cache`→ocache (via the opt-in `h3-rules/cache` handler; ocache is an
+ * optional peer), `redirect`/`proxy`→ufo (proxy's handler is the opt-in
+ * `h3-rules/proxy` subpath, which also pulls h3's `proxyRequest` — h3 is an
+ * external peer either way), and `headers`/`cors`/`basicAuth` ship no extra
+ * deps.
  */
 export interface RuleBenchSpec {
   /** Built-in rule name (matches the handler + its named export). */
@@ -34,7 +36,7 @@ export const RULE_BENCHES: RuleBenchSpec[] = [
     probe: ["GET", "/api/resource"],
   },
   {
-    // Shortcut that normalizes into a `headers` rule — same footprint as headers.
+    // Delegates to h3's `handleCors` — no extra runtime deps (h3 is a peer).
     name: "cors",
     deps: [],
     rules: { "/api/**": { cors: true } },

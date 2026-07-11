@@ -32,6 +32,10 @@ const forceSideEffects: Plugin = {
       path: join(SRC, "cache.ts"),
       sideEffects: true,
     }));
+    build.onResolve({ filter: /^h3-rules\/proxy$/ }, () => ({
+      path: join(SRC, "proxy.ts"),
+      sideEffects: true,
+    }));
     // In-repo imports are always relative and carry explicit `.ts` extensions.
     build.onResolve({ filter: /^\.\.?\// }, (args) =>
       args.importer.startsWith(SRC)
@@ -62,7 +66,11 @@ async function bundle(
     write: false,
     metafile: true,
     external: ["h3"],
-    alias: { "h3-rules": join(SRC, "index.ts"), "h3-rules/cache": join(SRC, "cache.ts") },
+    alias: {
+      "h3-rules": join(SRC, "index.ts"),
+      "h3-rules/cache": join(SRC, "cache.ts"),
+      "h3-rules/proxy": join(SRC, "proxy.ts"),
+    },
     plugins: opts?.forceSideEffects ? [forceSideEffects] : [],
     logLevel: "silent",
   });
@@ -154,6 +162,36 @@ describe("tree-shaking (esbuild)", () => {
     expect(out.has("rou3")).toBe(false);
     expect(out.has("ufo")).toBe(false);
     expect(out.has("src/match.ts")).toBe(false);
+  });
+
+  it("the whole h3-rules surface carries no proxy handler reference", async () => {
+    // Retain every export — the core entry must not reference the `proxy`
+    // handler (nor h3's `proxyRequest` it imports); it lives solely in
+    // `h3-rules/proxy` so a non-proxying bundle never pulls that machinery in.
+    const out = await bundle(
+      `import * as rules from "h3-rules";\nexport const all = { ...rules };`,
+    );
+    expect(out.has("src/proxy.ts")).toBe(false);
+    expect(out.has("src/match.ts")).toBe(true); // control: the surface is really retained
+  });
+
+  it("h3-rules/proxy resolves the proxy handler without the matcher or rou3", async () => {
+    const out = await bundle(`import { proxy } from "h3-rules/proxy";\nexport const p = proxy;`);
+    expect(out.has("src/proxy.ts")).toBe(true);
+    expect(out.has("rou3")).toBe(false);
+    expect(out.has("ocache")).toBe(false);
+    expect(out.has("src/match.ts")).toBe(false);
+  });
+
+  it("compiled codegen with a proxy rule imports the handler via h3-rules/proxy only", async () => {
+    // Positive control for the subpath sourcing: the generated
+    // `import { proxy … } from "h3-rules/proxy"` must resolve, while the rou3
+    // router still stays out of the compiled bundle.
+    const mod = compileRouteRules({ "/api/**": { proxy: "https://up.example/**" } });
+    expect(mod.imports).toContain('from "h3-rules/proxy"');
+    const out = await bundle(`${mod}\nexport const find = findRouteRules;`);
+    expect(out.has("src/proxy.ts")).toBe(true);
+    expect(out.has("rou3")).toBe(false);
   });
 
   it("compiled codegen module shakes unused handler deps", async () => {

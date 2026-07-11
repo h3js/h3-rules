@@ -31,10 +31,11 @@ export type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
 export { ruleHandlers } from "./rules/index.ts";
 export { headers } from "./rules/headers.ts";
 export { redirect } from "./rules/redirect.ts";
-export { proxy } from "./rules/proxy.ts";
 export { basicAuth } from "./rules/basic-auth.ts";
-// The ocache-backed `cache` handler lives in the `h3-rules/cache` subpath;
-// this factory builds one from an injected `defineCachedHandler`.
+// The `proxy` handler lives in the `h3-rules/proxy` subpath (opt-in, so h3's
+// `proxyRequest` stays out of bundles that don't proxy). The ocache-backed
+// `cache` handler lives in the `h3-rules/cache` subpath; this factory builds one
+// from an injected `defineCachedHandler`.
 export { createCacheRuleHandler } from "./rules/cache.ts";
 export type { CacheRuleHandlerOptions, DefineCachedHandler } from "./rules/cache.ts";
 

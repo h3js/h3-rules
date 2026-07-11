@@ -19,6 +19,7 @@ Add the `routeRules` middleware to your H3 app:
 import { H3, serve } from "h3";
 import { routeRules } from "h3-rules";
 import { cache } from "h3-rules/cache"; // only needed for cache/swr rules (requires ocache)
+import { proxy } from "h3-rules/proxy"; // only needed for proxy rules
 
 const app = new H3();
 
@@ -33,7 +34,7 @@ app.use(
       "/api/**": { cors: true },
       "GET /api/cached/**": { swr: 60 }, // method-scoped
     },
-    { handlers: { cache } },
+    { handlers: { cache, proxy } },
   ),
 );
 
@@ -44,15 +45,15 @@ Patterns are matched with [rou3](https://github.com/h3js/rou3) against `event.ur
 
 ### Rules
 
-| Rule        | Behavior                                                                                                                                             |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `headers`   | Set response headers. Applied to the final response (after `cache`/`redirect`/`proxy`), so a `cache-control` here overrides ocache's computed value. |
-| `redirect`  | Redirect (string defaults to status `307`; `/**` targets append the matched tail).                                                                   |
-| `proxy`     | Proxy the request to another origin or in-app path (same `/**` tail behavior).                                                                       |
-| `cache`     | Wrap the matched route handler with a cached handler. Needs a registered handler — see [Caching](#caching-h3-rulescache).                            |
-| `basicAuth` | HTTP Basic Authentication (runs before redirect/proxy/cache).                                                                                        |
-| `cors`      | Shortcut for permissive CORS headers (your `headers` win).                                                                                           |
-| `swr`       | Shortcut for `cache: { swr: true, maxAge?: number }` (`swr: 0` is valid; `swr: false` resets an inherited `cache`).                                  |
+| Rule        | Behavior                                                                                                                                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headers`   | Set response headers. Applied to the final response (after `cache`/`redirect`/`proxy`), so a `cache-control` here overrides ocache's computed value.                                                                                                |
+| `redirect`  | Redirect (string defaults to status `307`; `/**` targets append the matched tail).                                                                                                                                                                  |
+| `proxy`     | Proxy the request to another origin or in-app path (same `/**` tail behavior). Opt-in handler from `h3-rules/proxy` (see [Proxying](#proxying-h3-rulesproxy)).                                                                                      |
+| `cache`     | Wrap the matched route handler with a cached handler. Needs a registered handler — see [Caching](#caching-h3-rulescache).                                                                                                                           |
+| `basicAuth` | HTTP Basic Authentication (runs before redirect/proxy/cache).                                                                                                                                                                                       |
+| `cors`      | Handle CORS via h3's [`handleCors`](https://h3.dev/utils/security#cors). `true` = permissive defaults; an object = h3 `CorsOptions` (origin allowlist, `credentials`, `maxAge`, …). Preflight (`OPTIONS`) is answered directly, before `basicAuth`. |
+| `swr`       | Shortcut for `cache: { swr: true, maxAge?: number }` (`swr: 0` is valid; `swr: false` resets an inherited `cache`).                                                                                                                                 |
 
 Setting a rule to `false` on a more specific pattern resets it:
 
@@ -102,6 +103,19 @@ const cache = createCacheRuleHandler({
 ```
 
 The declarative rule options (`RouteRuleConfig["cache"]`) are the ocache-compatible `CacheRuleOptions` schema owned by `h3-rules`; implementation hooks (`getKey`, `shouldCache`, `getMaxAge`, …) are not rule data — pass them via the handler factory's `defaults`.
+
+### Proxying (`h3-rules/proxy`)
+
+Like caching, the `proxy` rule is **opt-in**: its handler imports h3's `proxyRequest` (the request-forwarding machinery), so it lives in the `h3-rules/proxy` subpath and stays out of every bundle that doesn't proxy. Register it explicitly, and matcher construction throws if a rule set uses `proxy` without a handler (pass `handlers: { proxy: undefined }` to deliberately keep the rule data-only):
+
+```ts
+import { routeRules } from "h3-rules";
+import { proxy } from "h3-rules/proxy";
+
+app.use(
+  routeRules({ "/api/proxy/**": { proxy: "https://example.com/**" } }, { handlers: { proxy } }),
+);
+```
 
 ### Utils
 
@@ -187,9 +201,9 @@ compileRouteRules(config, { matcher: { name: "routeMatcher", memoize: true } });
 
 `matcher: true` names the export `matcher`; pass a string to rename it, or `{ name?, memoize? }` to also wrap in `memoizeRouteRulesMatcher` (`memoize: { max }` tunes the cap). `memoizeRouteRulesMatcher` is imported **only** when `memoize` is set, so an un-memoized matcher export still tree-shakes it away. The infra import counts toward `mod.imports`.
 
-The generated module imports **only the rule handlers the rule set uses** — each built-in is a named export of `h3-rules` (`headers`, `redirect`, `proxy`, `basicAuth`), except `cache`, which imports from `h3-rules/cache` (the ocache-backed handler; requires the optional `ocache` peer only when a cache rule exists). Unused handlers and their dependencies (rou3's matcher always, ocache/ufo when `cache`/`redirect`/`proxy` are unused) tree-shake out of the bundle.
+The generated module imports **only the rule handlers the rule set uses** — most built-ins are a named export of `h3-rules` (`headers`, `redirect`, `basicAuth`, `cors`), except the opt-in subpath handlers: `cache` imports from `h3-rules/cache` (the ocache-backed handler; requires the optional `ocache` peer only when a cache rule exists) and `proxy` from `h3-rules/proxy` (pulls h3's `proxyRequest` only when a proxy rule exists). Unused handlers and their dependencies (rou3's matcher always, ocache/ufo when `cache`/`redirect`/`proxy` are unused) tree-shake out of the bundle.
 
-Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the module must export a member named exactly as the rule key, e.g. `cache: "#nitro/cache"` imports `cache`) or `{ source, export }` when the export is named something else. It is merged **over** the built-in preset (`DEFAULT_RUNTIME_RULES`: every built-in from `h3-rules`, `cache` from `h3-rules/cache`), so you only list what you add or change — the built-ins stay registered. Handlers sharing a source collapse into one import statement:
+Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the module must export a member named exactly as the rule key, e.g. `cache: "#nitro/cache"` imports `cache`) or `{ source, export }` when the export is named something else. It is merged **over** the built-in preset (`DEFAULT_RUNTIME_RULES`: every built-in from `h3-rules`, except `cache` from `h3-rules/cache` and `proxy` from `h3-rules/proxy`), so you only list what you add or change — the built-ins stay registered. Handlers sharing a source collapse into one import statement:
 
 ```ts
 import { compileRouteRules } from "h3-rules/compiler";

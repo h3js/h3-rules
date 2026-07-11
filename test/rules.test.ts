@@ -2,13 +2,16 @@ import { H3 } from "h3";
 import { describe, expect, it } from "vitest";
 import { routeRules } from "../src/h3.ts";
 import { isPathInScope } from "../src/internal/scope.ts";
+import { proxy } from "../src/proxy.ts";
 import { resolveRuleTarget } from "../src/rules/_utils.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
 import type { RouteRulesMatcherOptions } from "../src/match.ts";
 
+// `proxy` is an opt-in subpath handler (`h3-rules/proxy`) — register it by
+// default so the proxy-rule cases below construct, while letting a test override.
 const createApp = (config: Record<string, RouteRuleConfig>, opts?: RouteRulesMatcherOptions) => {
   const app = new H3();
-  app.use(routeRules(config, opts));
+  app.use(routeRules(config, { ...opts, handlers: { proxy, ...opts?.handlers } }));
   return app;
 };
 

@@ -1,13 +1,14 @@
 import { cache } from "../src/cache.ts";
+import { proxy } from "../src/proxy.ts";
 import type { RouteRulesMatcher } from "../src/match.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
 import type { MatchedRouteRule, RouteRuleConfig, RuleHandlers } from "../src/types.ts";
 
-// The fixture uses `cache`/`swr` rules, and the core registry ships no `cache`
-// handler (it lives in `h3-rules/cache`) — runtime matchers over the fixture
-// must register it (`{ handlers: FIXTURE_HANDLERS }`), and compiled-parity
-// harnesses bind the same set as `<ns>$<name>` locals.
-export const FIXTURE_HANDLERS: RuleHandlers = { ...ruleHandlers, cache };
+// The fixture uses `cache`/`swr` and `proxy` rules, and the core registry ships
+// neither handler (they live in `h3-rules/cache` / `h3-rules/proxy`) — runtime
+// matchers over the fixture must register them (`{ handlers: FIXTURE_HANDLERS }`),
+// and compiled-parity harnesses bind the same set as `<ns>$<name>` locals.
+export const FIXTURE_HANDLERS: RuleHandlers = { ...ruleHandlers, cache, proxy };
 
 // Shared parity-grid fixture for compiler.test.ts and premerge.test.ts
 // (chain-clean by construction so it is valid under `preMerge` too).

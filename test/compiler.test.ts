@@ -16,6 +16,7 @@ import {
 import type { FindRouteRules, RouteRulesMatcher } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import * as h3RulesCache from "../src/cache.ts";
+import * as h3RulesProxy from "../src/proxy.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
 import { FIXTURE, FIXTURE_HANDLERS, PROBES, snapshotResult } from "./_fixture.ts";
@@ -177,10 +178,11 @@ describe("generated code shape", () => {
 
   it("DEFAULT_RUNTIME_RULES presets every built-in to its h3-rules source", () => {
     expect(Object.keys(DEFAULT_RUNTIME_RULES).sort()).toEqual([...RUNTIME_RULE_NAMES].sort());
+    // `cache`/`proxy` live in their own subpaths so their deps (ocache, h3's
+    // `proxyRequest`) only enter a compiled bundle when the rule is used.
+    const subpath: Record<string, string> = { cache: "h3-rules/cache", proxy: "h3-rules/proxy" };
     for (const name of RUNTIME_RULE_NAMES) {
-      // `cache` lives in the subpath so ocache (optional peer) only enters a
-      // compiled bundle when a cache rule is used.
-      expect(DEFAULT_RUNTIME_RULES[name]).toBe(name === "cache" ? "h3-rules/cache" : "h3-rules");
+      expect(DEFAULT_RUNTIME_RULES[name]).toBe(subpath[name] ?? "h3-rules");
     }
   });
 
@@ -343,19 +345,23 @@ describe("generated code shape", () => {
     }
   });
 
-  it("default RUNTIME_RULE_NAMES matches the ruleHandlers registry plus `cache`", () => {
-    // `cache` has a runtime handler but no registry entry — it is the
-    // `h3-rules/cache` subpath export instead.
-    expect([...RUNTIME_RULE_NAMES].sort()).toEqual([...Object.keys(ruleHandlers), "cache"].sort());
+  it("default RUNTIME_RULE_NAMES matches the ruleHandlers registry plus the subpath handlers", () => {
+    // `cache` and `proxy` have a runtime handler but no registry entry — they are
+    // the `h3-rules/cache` / `h3-rules/proxy` subpath exports instead.
+    expect([...RUNTIME_RULE_NAMES].sort()).toEqual(
+      [...Object.keys(ruleHandlers), "cache", "proxy"].sort(),
+    );
   });
 
   it("every runtime rule handler is a named export of its default source", () => {
     // Generated named imports must resolve to the exact handler each source
     // module exports: the registry handlers from "h3-rules", `cache` from
-    // "h3-rules/cache".
+    // "h3-rules/cache", `proxy` from "h3-rules/proxy".
     for (const name of RUNTIME_RULE_NAMES) {
       if (name === "cache") {
         expect(h3RulesCache.cache, name).toBe(FIXTURE_HANDLERS.cache);
+      } else if (name === "proxy") {
+        expect(h3RulesProxy.proxy, name).toBe(FIXTURE_HANDLERS.proxy);
       } else {
         expect((h3Rules as Record<string, unknown>)[name], name).toBe(ruleHandlers[name]);
       }

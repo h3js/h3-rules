@@ -1,4 +1,5 @@
 import { cache } from "../src/cache.ts";
+import { proxy } from "../src/proxy.ts";
 import { compileFindRouteRules } from "../src/compiler.ts";
 import {
   createMatcherFromFind,
@@ -11,10 +12,11 @@ import type { RouteRuleConfig, RuleHandlers } from "../src/types.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
 import { RULES } from "./fixture.ts";
 
-// The fixtures use cache/swr rules; the core registry ships no `cache` handler
-// (it lives in `h3-rules/cache`), so runtime matchers register it explicitly
-// and compiled evals bind it like the other handlers.
-const benchHandlers: RuleHandlers = { ...ruleHandlers, cache };
+// The fixtures use cache/swr and proxy rules; the core registry ships neither
+// handler (they live in `h3-rules/cache` / `h3-rules/proxy`), so runtime
+// matchers register them explicitly and compiled evals bind them like the other
+// handlers.
+const benchHandlers: RuleHandlers = { ...ruleHandlers, cache, proxy };
 
 export interface BenchVariant {
   name: string;
