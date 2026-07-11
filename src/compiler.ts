@@ -8,10 +8,9 @@ export type {
   CompiledRouteRules,
   CompileModuleOptions,
   CompileRouteRulesOptions,
+  MatcherExport,
   RouteRulesInput,
 } from "./compiler/options.ts";
-
-export type { MatcherExport } from "./compiler/matcher-export.ts";
 
 export {
   DEFAULT_RUNTIME_RULES,

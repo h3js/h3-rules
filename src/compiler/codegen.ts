@@ -1,6 +1,6 @@
 import type { RouteRuleEntry } from "../merge.ts";
 import type { PreMergedRouteRules } from "../internal/premerge.ts";
-import { assertHandlerBinding } from "./binding.ts";
+import type { MatcherExport } from "./options.ts";
 import { isRuntimeRule, type RuntimeRuleImport } from "./runtime-rules.ts";
 
 /** Serialize a pre-merged layer wrapper (preMerge mode). */
@@ -48,6 +48,65 @@ export function serializeRouteRuleEntries(
     .map((fields) => `{${fields}}`)
     .join(",")}]`;
 }
+
+/** Default export name for the optional matcher export (`matcher: true`). */
+const DEFAULT_MATCHER_EXPORT_NAME = "matcher";
+
+/**
+ * Resolve the `matcher` option into the infra import + export-declaration source
+ * for the ready-to-use matcher export, or `null` when none is requested.
+ * `createMatcherFromFind` (and `memoizeRouteRulesMatcher`, only when memoizing)
+ * are imported from `h3-rules`; the export wraps the `findRouteRules` binding the
+ * surrounding module declares.
+ */
+export function compileMatcherExport(
+  matcher: MatcherExport | undefined,
+): { imports: string; body: string } | null {
+  if (!matcher) {
+    return null;
+  }
+  const spec = typeof matcher === "string" ? { name: matcher } : matcher === true ? {} : matcher;
+  const name = spec.name || DEFAULT_MATCHER_EXPORT_NAME;
+  // The export binds as a top-level identifier in generated code — reject a
+  // non-identifier here rather than as a parse error in the consumer's module.
+  assertHandlerBinding(name, "matcher export name");
+  const { memoize } = spec;
+  let expr = "createMatcherFromFind(findRouteRules)";
+  if (memoize) {
+    // A `{ max }` cap serializes as a second argument; bare `true`/`{}` uses the
+    // default cap (no argument), matching memoizeRouteRulesMatcher's default.
+    const max = memoize === true ? undefined : memoize.max;
+    expr =
+      max === undefined
+        ? `memoizeRouteRulesMatcher(${expr})`
+        : `memoizeRouteRulesMatcher(${expr}, { max: ${JSON.stringify(max)} })`;
+  }
+  return {
+    imports: `import { createMatcherFromFind${
+      memoize ? ", memoizeRouteRulesMatcher" : ""
+    } } from "h3-rules";`,
+    body: `export const ${name} = ${expr};\n`,
+  };
+}
+
+/**
+ * Handler references bind as `<ns>$<name>` identifiers in generated code; a
+ * non-identifier would otherwise surface as a parse error in the consumer's
+ * generated module, far from the misconfiguration. Used to validate every
+ * binding name the compiler emits (`runtimeRules` keys, per-rule `export`
+ * names, `handlersImportName`, and the matcher export name).
+ */
+export function assertHandlerBinding(name: string, what: string): void {
+  if (!JS_IDENTIFIER_RE.test(name)) {
+    throw new Error(
+      `[h3-rules] compiler: ${what} \`${name}\` is not a valid JS identifier — it is used as a binding in generated code`,
+    );
+  }
+}
+
+// ---- Internal ----
+
+const JS_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
 
 // `JSON.stringify` silently drops functions and nested `undefined` and mangles
 // class instances (`Date` → string, `RegExp` → `{}`), which would make the

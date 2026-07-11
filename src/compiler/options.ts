@@ -1,6 +1,6 @@
+import type { MatcherMemoizeOptions } from "../match.ts";
 import { normalizeRouteRules } from "../normalize.ts";
 import type { RouteRuleConfig, RouteRules } from "../types.ts";
-import type { MatcherExport } from "./matcher-export.ts";
 import type { RuntimeRuleImport } from "./runtime-rules.ts";
 
 /** Default identifier prefix for imported handlers (`<prefix>$<name>` bindings). */
@@ -56,6 +56,28 @@ export interface CompileRouteRulesOptions {
    */
   preMerge?: boolean;
 }
+
+/**
+ * Controls the optional ready-to-use matcher export {@link compileRouteRules}
+ * appends alongside `findRouteRules`. `false`/omitted emits no matcher (the
+ * default — take `findRouteRules` and wrap it yourself). Otherwise the module
+ * also exports a matcher wrapping the compiled `findRouteRules`:
+ *
+ * - `true` — `export const matcher = createMatcherFromFind(findRouteRules)`.
+ * - a string — same, but named after the string (e.g. `"routeRulesMatcher"`).
+ * - `{ name?, memoize? }` — rename the export and/or bake in memoization
+ *   (`memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules))`; pass
+ *   `memoize: { max }` to tune the cap). `memoizeRouteRulesMatcher` is imported
+ *   **only** when `memoize` is set, so an un-memoized matcher export still
+ *   tree-shakes it away.
+ *
+ * `createMatcherFromFind` (and, with `memoize`, `memoizeRouteRulesMatcher`) is
+ * imported from `h3-rules` and counts toward {@link CompiledRouteRules.imports}.
+ */
+export type MatcherExport =
+  | boolean
+  | string
+  | { name?: string; memoize?: boolean | MatcherMemoizeOptions };
 
 /**
  * {@link compileRouteRules} options — {@link CompileRouteRulesOptions} plus the

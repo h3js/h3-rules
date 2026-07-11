@@ -3,8 +3,12 @@ import { createRulesRouter } from "../match.ts";
 import type { RouteRuleEntry } from "../merge.ts";
 import type { PreMergedRouteRules } from "../internal/premerge.ts";
 import type { RouteRules } from "../types.ts";
-import { assertHandlerBinding } from "./binding.ts";
-import { compileMatcherExport } from "./matcher-export.ts";
+import {
+  assertHandlerBinding,
+  compileMatcherExport,
+  serializePreMergedRouteRules,
+  serializeRouteRuleEntries,
+} from "./codegen.ts";
 import {
   DEFAULT_HANDLERS_IMPORT_NAME,
   normalizeInput,
@@ -13,9 +17,41 @@ import {
   type CompiledRouteRules,
   type RouteRulesInput,
 } from "./options.ts";
-import { resolveEffectivePreMerge } from "./pre-merge.ts";
 import { isRuntimeRule, resolveRuntimeRule, resolveRuntimeRules } from "./runtime-rules.ts";
-import { serializePreMergedRouteRules, serializeRouteRuleEntries } from "./serialize.ts";
+
+/**
+ * Compile a rule set into a complete ESM module exporting `findRouteRules`
+ * (and, with {@link CompileModuleOptions.matcher}, a ready-to-use matcher).
+ * Input is normalized internally (see {@link RouteRulesInput}) — pass authored
+ * config directly. Returns a {@link CompiledRouteRules}: `code` (or `String(…)`)
+ * is the whole module; `imports`/`body` are its two halves for callers that
+ * compose the codegen into a larger module.
+ */
+export function compileRouteRules(
+  config: RouteRulesInput,
+  opts: CompileModuleOptions = {},
+): CompiledRouteRules {
+  // Normalize once up front; the sub-calls re-normalize the already-normalized
+  // set, which is an idempotent no-op.
+  const rules = normalizeInput(config);
+  // Resolve preMerge once up front (warning on fallback here) and hand the
+  // sub-calls the already-resolved mode, so a non-chain-clean rule set warns a
+  // single time rather than once per sub-call.
+  const resolved: CompileModuleOptions = {
+    ...opts,
+    preMerge: resolveEffectivePreMerge(rules, opts),
+  };
+  const handlerImports = compileHandlersImport(rules, resolved);
+  // Optional matcher export: its infra import joins the handler imports (both
+  // hoistable), its declaration follows `findRouteRules` in the body (it
+  // references that local binding). `null` when no matcher is requested.
+  const matcherExport = compileMatcherExport(opts.matcher);
+  const imports = [handlerImports, matcherExport?.imports].filter(Boolean).join("\n");
+  const find = `export const findRouteRules = ${compileFindRouteRules(rules, resolved)};\n`;
+  const body = matcherExport ? find + matcherExport.body : find;
+  const code = `${imports ? imports + "\n" : ""}${body}`;
+  return { imports, body, code, toString: () => code };
+}
 
 /**
  * Compile a rule set into the source of a `findRouteRules(method, pathname)`
@@ -54,36 +90,6 @@ export function compileFindRouteRules(
         ? serializeRouteRuleEntries(data as RouteRuleEntry[], ns, runtimeRules)
         : serializePreMergedRouteRules(data as PreMergedRouteRules, ns, runtimeRules),
   });
-}
-
-/**
- * The runtime rule names a **normalized** rule set actually uses (sorted) — the
- * exact handlers {@link compileFindRouteRules} references and
- * {@link compileHandlersImport} imports.
- */
-function usedRuleHandlerNames(
-  rules: Record<string, RouteRules>,
-  opts: CompileRouteRulesOptions = {},
-  preMerge = false,
-): string[] {
-  const runtimeRules = resolveRuntimeRules(opts.runtimeRules);
-  const used = new Set<string>();
-  for (const key in rules) {
-    for (const [name, options] of Object.entries(rules[key]!)) {
-      // preMerge resolves `false` resets at compile time, so they never
-      // reference a handler in the output; plain mode serializes them with one.
-      // `preMerge` is the *effective* mode (post-fallback), not `opts.preMerge`,
-      // so a fallen-back compile imports the handlers plain mode references.
-      if (
-        options !== undefined &&
-        (options !== false || !preMerge) &&
-        isRuntimeRule(name, runtimeRules)
-      ) {
-        used.add(name);
-      }
-    }
-  }
-  return [...used].sort();
 }
 
 /**
@@ -135,36 +141,66 @@ export function compileHandlersImport(
     .join("\n");
 }
 
+// ---- Internal ----
+
 /**
- * Compile a rule set into a complete ESM module exporting `findRouteRules`
- * (and, with {@link CompileModuleOptions.matcher}, a ready-to-use matcher).
- * Input is normalized internally (see {@link RouteRulesInput}) — pass authored
- * config directly. Returns a {@link CompiledRouteRules}: `code` (or `String(…)`)
- * is the whole module; `imports`/`body` are its two halves for callers that
- * compose the codegen into a larger module.
+ * Resolve the effective `preMerge` for compilation. Pre-merge requires a
+ * chain-clean rule set; unlike the runtime matcher (where a misconfigured
+ * `preMerge` is a startup error the developer should see), the compiler treats
+ * pre-merge as an optional throughput optimization and is **fail-safe**: if the
+ * pre-merge analysis rejects the rule set (partial overlap, unanalyzable
+ * pattern), it warns and reports plain mode so the build still produces a
+ * correct (un-pre-merged) matcher. Resolved identically wherever the compiler
+ * branches on preMerge so generated code, handler imports, and used-handler
+ * names stay consistent.
  */
-export function compileRouteRules(
-  config: RouteRulesInput,
-  opts: CompileModuleOptions = {},
-): CompiledRouteRules {
-  // Normalize once up front; the sub-calls re-normalize the already-normalized
-  // set, which is an idempotent no-op.
-  const rules = normalizeInput(config);
-  // Resolve preMerge once up front (warning on fallback here) and hand the
-  // sub-calls the already-resolved mode, so a non-chain-clean rule set warns a
-  // single time rather than once per sub-call.
-  const resolved: CompileModuleOptions = {
-    ...opts,
-    preMerge: resolveEffectivePreMerge(rules, opts),
-  };
-  const handlerImports = compileHandlersImport(rules, resolved);
-  // Optional matcher export: its infra import joins the handler imports (both
-  // hoistable), its declaration follows `findRouteRules` in the body (it
-  // references that local binding). `null` when no matcher is requested.
-  const matcherExport = compileMatcherExport(opts.matcher);
-  const imports = [handlerImports, matcherExport?.imports].filter(Boolean).join("\n");
-  const find = `export const findRouteRules = ${compileFindRouteRules(rules, resolved)};\n`;
-  const body = matcherExport ? find + matcherExport.body : find;
-  const code = `${imports ? imports + "\n" : ""}${body}`;
-  return { imports, body, code, toString: () => code };
+function resolveEffectivePreMerge(
+  rules: Record<string, RouteRules>,
+  opts: CompileRouteRulesOptions,
+): boolean {
+  if (!opts.preMerge) {
+    return false;
+  }
+  try {
+    // Building the router runs the pre-merge analysis, which throws on a
+    // non-chain-clean rule set (see preMergeRuleLayers). The router itself is
+    // rebuilt by the caller; this is only a validity probe.
+    createRulesRouter(rules, {}, opts.baseURL, true);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[h3-rules] compiler: preMerge could not be applied — falling back to plain compilation.\n  ${(error as Error).message}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * The runtime rule names a **normalized** rule set actually uses (sorted) — the
+ * exact handlers {@link compileFindRouteRules} references and
+ * {@link compileHandlersImport} imports.
+ */
+function usedRuleHandlerNames(
+  rules: Record<string, RouteRules>,
+  opts: CompileRouteRulesOptions = {},
+  preMerge = false,
+): string[] {
+  const runtimeRules = resolveRuntimeRules(opts.runtimeRules);
+  const used = new Set<string>();
+  for (const key in rules) {
+    for (const [name, options] of Object.entries(rules[key]!)) {
+      // preMerge resolves `false` resets at compile time, so they never
+      // reference a handler in the output; plain mode serializes them with one.
+      // `preMerge` is the *effective* mode (post-fallback), not `opts.preMerge`,
+      // so a fallen-back compile imports the handlers plain mode references.
+      if (
+        options !== undefined &&
+        (options !== false || !preMerge) &&
+        isRuntimeRule(name, runtimeRules)
+      ) {
+        used.add(name);
+      }
+    }
+  }
+  return [...used].sort();
 }
