@@ -64,25 +64,27 @@ export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"ca
   const defaults = opts?.defaults;
   const cachedHandlers = new Map<string, EventHandler>();
 
-  return (m) =>
-    function cacheRouteRule(event, next) {
-      if (!event.context.matchedRoute) {
-        return next();
-      }
-      const { handler, route } = event.context.matchedRoute;
-      const key = `${m.route}:${route}`;
-      let cachedHandler = cachedHandlers.get(key);
-      if (!cachedHandler) {
-        cachedHandler = defineCached(handler, {
-          group: CACHE_GROUP,
-          name: key,
-          ...defaults,
-          ...(m.options as CachedEventHandlerOptions),
-        });
-        cachedHandlers.set(key, cachedHandler);
-      }
-      return cachedHandler(event);
-    };
+  return {
+    handler: (m) =>
+      function cacheRouteRule(event, next) {
+        if (!event.context.matchedRoute) {
+          return next();
+        }
+        const { handler, route } = event.context.matchedRoute;
+        const key = `${m.route}:${route}`;
+        let cachedHandler = cachedHandlers.get(key);
+        if (!cachedHandler) {
+          cachedHandler = defineCached(handler, {
+            group: CACHE_GROUP,
+            name: key,
+            ...defaults,
+            ...(m.options as CachedEventHandlerOptions),
+          });
+          cachedHandlers.set(key, cachedHandler);
+        }
+        return cachedHandler(event);
+      },
+  };
 }
 
 /**

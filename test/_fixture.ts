@@ -83,7 +83,7 @@ export function snapshotResult(result: ReturnType<RouteRulesMatcher>) {
           options: r.options,
           params: r.params ?? undefined,
           hasHandler: !!r.handler,
-          order: r.handler?.order || 0,
+          order: r.handler?.order,
         },
       ];
     }),

@@ -552,8 +552,10 @@ describe("matcher options", () => {
       { "/x": { shout: "hello" } },
       {
         handlers: {
-          shout: (m) => (event) => {
-            event.res.headers.set("x-shout", String(m.options).toUpperCase());
+          shout: {
+            handler: (m) => (event) => {
+              event.res.headers.set("x-shout", String(m.options).toUpperCase());
+            },
           },
         },
       },

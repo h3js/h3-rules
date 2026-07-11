@@ -135,8 +135,8 @@ export interface MatchedRouteRule<K extends RouteRuleName = RouteRuleName> {
   /** rou3 params extracted from the matched pattern. */
   params?: Record<string, string>;
   /**
-   * Middleware constructor. May expose an `order` property — lower runs first
-   * (default `0`). Data-only rules have no handler.
+   * Rule handler: the middleware constructor plus its optional `order`.
+   * Data-only rules have no handler.
    */
   handler?: RuleHandler<K>;
 }
@@ -147,12 +147,16 @@ export type MatchedRouteRules = {
 };
 
 /**
- * A rule handler constructs an H3 {@link Middleware} from a matched rule.
- * An optional `order` controls execution order (lower runs first, default `0`).
+ * A rule handler: `handler` constructs an H3 {@link Middleware} from a matched
+ * rule, and the optional `order` controls execution order relative to other
+ * rules — lower runs first. The shorthands `"pre"` (`-1`) and `"post"` (`1`) sit
+ * on either side of the default (`0`, when omitted); a `number` gives finer
+ * control (e.g. `-2` to run before `"pre"`).
  */
-export type RuleHandler<K extends RouteRuleName = RouteRuleName> = ((
-  matched: MatchedRouteRule<K>,
-) => Middleware) & { order?: number };
+export interface RuleHandler<K extends RouteRuleName = RouteRuleName> {
+  order?: "pre" | "post" | number;
+  handler: (matched: MatchedRouteRule<K>) => Middleware;
+}
 
 /** Map of rule name → handler constructor. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

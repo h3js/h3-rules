@@ -8,7 +8,13 @@ import { preMergeRuleLayers } from "./internal/premerge.ts";
 import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import { ruleHandlers } from "./rules/index.ts";
 import { canonicalPath } from "./internal/scope.ts";
-import type { MatchResult, MatchedRouteRule, RouteRules, RuleHandlers } from "./types.ts";
+import type {
+  MatchResult,
+  MatchedRouteRule,
+  RouteRules,
+  RuleHandler,
+  RuleHandlers,
+} from "./types.ts";
 
 export interface RouteRulesMatcherOptions {
   /**
@@ -185,21 +191,21 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
     const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers);
 
     // Build the ordered middleware array from merged rules. Rules without a
-    // handler (data-only) are skipped; handlers run sorted by `handler.order || 0`
-    // ascending (`basicAuth` has `order: -1` so unauthorized requests are neither
-    // redirected nor proxied; `headers` is also `order: -1` so it runs outer to
-    // `cache`/`redirect`/`proxy` and its headers land on the final response — see
-    // `src/rules/headers.ts`).
+    // handler (data-only) are skipped; handlers run sorted by `order` ascending
+    // (`"pre"` = -1, `"post"` = 1, default 0, or an explicit number) — `basicAuth`
+    // is `"pre"` so unauthorized requests are neither redirected nor proxied;
+    // `headers` is also `"pre"` so it runs outer to `cache`/`redirect`/`proxy` and
+    // its headers land on the final response — see `src/rules/headers.ts`.
     const routeRuleMiddleware: MatchResult["routeRuleMiddleware"] = [];
     const orderedRules = (Object.values(routeRules) as MatchedRouteRule[]).sort(
-      (a, b) => (a.handler?.order || 0) - (b.handler?.order || 0),
+      (a, b) => orderWeight(a.handler) - orderWeight(b.handler),
     );
     for (const rule of orderedRules) {
       // merged rule sets never contain `false` options (types.ts: MatchedRouteRule)
       if (!rule.handler) {
         continue;
       }
-      routeRuleMiddleware.push(rule.handler(rule));
+      routeRuleMiddleware.push(rule.handler.handler(rule));
     }
 
     return { routeRules, routeRuleMiddleware };
@@ -245,6 +251,14 @@ export function memoizeRouteRulesMatcher(
 // ------------------------------------------------------------------------
 // Internal
 // ------------------------------------------------------------------------
+
+// Sort weight for a handler's `order` (lower runs first): a `number` is used
+// as-is, `"pre"` is -1, `"post"` is 1, and the default (omitted / data-only
+// rules with no handler) is 0.
+function orderWeight(handler: RuleHandler | undefined): number {
+  const order = handler?.order;
+  return typeof order === "number" ? order : order === "pre" ? -1 : order === "post" ? 1 : 0;
+}
 
 // The `redirect`/`proxy` scope check (`resolveRuleTarget`) runs against the full
 // request path, which includes the `baseURL` prefix the patterns are registered

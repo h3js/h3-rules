@@ -139,11 +139,40 @@ describe("merge algorithm", () => {
     });
     const { routeRules, routeRuleMiddleware } = match("GET", "/app/x");
     expect(routeRuleMiddleware).toHaveLength(2);
-    // basicAuth has order -1: its middleware must come first
-    expect(routeRules.basicAuth!.handler!.order).toBe(-1);
+    // basicAuth has order -2 (outer to headers at -1): its middleware comes first
+    expect(routeRules.basicAuth!.handler!.order).toBe(-2);
     expect(routeRuleMiddleware[0]).toBe(
       routeRuleMiddleware.find((mw) => mw.name === "authRouteRule"),
     );
+  });
+
+  it("sorts middleware by numeric handler order (ascending, mixed with pre/post)", () => {
+    const mk = (name: string) => ({
+      // name the produced middleware so the resulting order is observable
+      handler: () => Object.defineProperty(() => undefined, "name", { value: name }),
+    });
+    const match = createRouteRulesMatcher(
+      normalizeRouteRules({
+        "/x": { isr: true, custom: true, tags: true, shout: true, "my-rule": true },
+      }),
+      {
+        handlers: {
+          isr: { ...mk("isr"), order: 2 }, // after "post"
+          custom: { ...mk("custom"), order: -5 }, // before "pre"
+          tags: { ...mk("tags"), order: "pre" }, // -1
+          shout: mk("shout"), // default 0
+          "my-rule": { ...mk("my-rule"), order: "post" }, // 1
+        },
+      },
+    );
+    const { routeRuleMiddleware } = match("GET", "/x");
+    expect(routeRuleMiddleware.map((mw) => mw.name)).toEqual([
+      "custom", // -5
+      "tags", // -1
+      "shout", // 0
+      "my-rule", // 1
+      "isr", // 2
+    ]);
   });
 
   it("data-only rules are merged but produce no middleware", () => {

@@ -78,9 +78,13 @@ const matcher = createRouteRulesMatcher(normalizeRouteRules(config), {
   baseURL: "/base", // prefix all patterns
   preMerge: true, // pre-merge pattern chains at startup (throws on ambiguous rule sets)
   handlers: {
-    // add or override rule handlers by name; `undefined` = data-only
-    myRule: (matched) => (event, next) => {
-      /* ... */
+    // add or override rule handlers by name; `undefined` = data-only.
+    // A handler is `{ handler, order? }` — `order` controls execution order
+    // (lower runs first): `"pre"` (-1), `"post"` (1), a number, or omit for 0.
+    myRule: {
+      handler: (matched) => (event, next) => {
+        /* ... */
+      },
     },
     // custom cache wiring goes through the handler registry:
     // cache: createCacheRuleHandler({

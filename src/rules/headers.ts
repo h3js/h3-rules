@@ -12,17 +12,16 @@ import type { RuleHandler } from "../types.ts";
 // outer `prepareResponse` merge these over the (cached) response headers, so a
 // user `cache-control` wins.
 //
-// `basicAuth` (also order -1) still gates first: on auth failure `next()`
-// throws before the set, so unauthorized responses never carry these headers
-// regardless of tie order.
-export const headers: RuleHandler<"headers"> = /* @__PURE__ */ Object.assign(
-  ((m) =>
+// `basicAuth` (order -2) is outer to this, so it gates first: on auth failure it
+// throws before `headers` runs, so unauthorized responses never carry these.
+export const headers: RuleHandler<"headers"> = {
+  order: -1,
+  handler: (m) =>
     async function headersRouteRule(event, next) {
       const response = await next();
       for (const [key, value] of Object.entries(m.options || {})) {
         event.res.headers.set(key, value);
       }
       return response;
-    }) satisfies RuleHandler<"headers">,
-  { order: -1 },
-);
+    },
+};
