@@ -35,7 +35,7 @@
     "prepack": "pnpm build",
     "release": "pnpm test && pnpm build && changelogen --release && npm publish && git push --follow-tags",
     "test": "pnpm lint && pnpm typecheck && vitest run --coverage",
-    "typecheck": "tsgo --noEmit --skipLibCheck"
+    "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "dependencies": {
     "rou3": "^0.9.1",
@@ -43,7 +43,6 @@
   },
   "devDependencies": {
     "@types/node": "latest",
-    "@typescript/native-preview": "latest",
     "@vitest/coverage-v8": "latest",
     "automd": "latest",
     "changelogen": "latest",
@@ -58,7 +57,7 @@
     "vitest": "latest"
   },
   "peerDependencies": {
-    "h3": "^2.0.1-rc.24",
+    "h3": "^2.0.1-rc.25",
     "ocache": ">=0.2.0"
   },
   "peerDependenciesMeta": {

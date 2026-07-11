@@ -7,8 +7,10 @@ blockExoticSubdeps: true
 dedupePeers: true
 ignoreWorkspaceRootCheck: true
 minimumReleaseAgeExclude:
+  - obuild*
   - ocache*
   - rou3*
   - ufo*
   - h3*
+  - srvx*
 trustPolicy: no-downgrade
