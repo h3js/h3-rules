@@ -149,7 +149,7 @@ describe("merge algorithm", () => {
     );
   });
 
-  it("sorts middleware by numeric handler order (ascending, mixed with pre/post)", () => {
+  it("sorts middleware by numeric handler order (ascending, custom bands mixed with defaults)", () => {
     const mk = (name: string) => ({
       // name the produced middleware so the resulting order is observable
       handler: () => Object.defineProperty(() => undefined, "name", { value: name }),
@@ -160,11 +160,11 @@ describe("merge algorithm", () => {
       }),
       {
         handlers: {
-          isr: { ...mk("isr"), order: 2 }, // after "post"
-          custom: { ...mk("custom"), order: -5 }, // before "pre"
-          tags: { ...mk("tags"), order: "pre" }, // -1
+          isr: { ...mk("isr"), order: 2 },
+          custom: { ...mk("custom"), order: -5 }, // outer to all built-ins
+          tags: { ...mk("tags"), order: -1 }, // the `headers` band
           shout: mk("shout"), // default 0
-          "my-rule": { ...mk("my-rule"), order: "post" }, // 1
+          "my-rule": { ...mk("my-rule"), order: 1 },
         },
       },
     );

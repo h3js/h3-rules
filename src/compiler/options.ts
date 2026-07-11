@@ -1,29 +1,8 @@
 import type { MatcherMemoizeOptions } from "../match.ts";
-import { normalizeRouteRules } from "../normalize.ts";
-import type { RouteRuleConfig, RouteRules } from "../types.ts";
 import type { RuntimeRuleImport } from "./runtime-rules.ts";
 
 /** Default identifier prefix for imported handlers (`<prefix>$<name>` bindings). */
 export const DEFAULT_HANDLERS_IMPORT_NAME = "__ruleHandlers__";
-
-/**
- * Rule-set input accepted by the compiler entrypoints: authored config
- * ({@link RouteRuleConfig} values — shortcuts and string forms included) or an
- * already-normalized rule set ({@link RouteRules} values, e.g. from a consumer
- * that normalizes for its own purposes).
- */
-export type RouteRulesInput = Record<string, RouteRuleConfig | RouteRules>;
-
-// The compiler runs at build time, so unlike the runtime matcher (which takes
-// pre-normalized rules to keep normalization out of runtime bundles) every
-// public entrypoint normalizes its own input — raw config would otherwise
-// silently mis-compile (an unexpanded `swr` shortcut compiles as a data-only
-// rule with no cache handler import). `normalizeRouteRules` is idempotent (a
-// pinned contract — see test/normalize.test.ts), so already-normalized input
-// passes through unchanged.
-export function normalizeInput(config: RouteRulesInput): Record<string, RouteRules> {
-  return normalizeRouteRules(config as Record<string, RouteRuleConfig>);
-}
 
 export interface CompileRouteRulesOptions {
   /** Base URL prefix for all rule patterns (trailing slash trimmed). */

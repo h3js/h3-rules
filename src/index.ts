@@ -5,6 +5,7 @@
 
 // h3 middleware (headline API)
 export { routeRules } from "./h3.ts";
+export type { RouteRulesOptions } from "./h3.ts";
 
 // Runtime matcher
 export {

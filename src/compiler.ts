@@ -9,7 +9,6 @@ export type {
   CompileModuleOptions,
   CompileRouteRulesOptions,
   MatcherExport,
-  RouteRulesInput,
 } from "./compiler/options.ts";
 
 export {

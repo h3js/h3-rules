@@ -34,7 +34,7 @@ const CACHE_GROUP = "h3-rules/route-rules";
  * route exactly once across requests.
  *
  * For the ready-made ocache-backed handler, use `h3-rules/cache` instead:
- * its `cache` export / `createCacheRuleHandler(opts)` wire ocache with h3's
+ * its `cache` export / `createOcacheRuleHandler(opts)` wire ocache with h3's
  * `toResponse` / `handleCacheHeaders` glue.
  */
 export function createCacheRuleHandler(opts: CacheRuleHandlerOptions): RuleHandler<"cache"> {

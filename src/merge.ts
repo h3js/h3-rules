@@ -72,6 +72,20 @@ export function isMergeableObject(value: unknown): value is object {
   return value !== null && typeof value === "object";
 }
 
+// THE core option-merge rule, shared by every merge site (runtime layer merge
+// below, build-time chain pre-merge in `src/internal/premerge.ts`, and the
+// canonical-key collision merge in `src/normalize.ts`): two object options
+// shallow-merge with the incoming (more specific / later) keys winning;
+// anything else — non-objects, `null`, arrays-in-objects as leaf values —
+// overrides wholesale. The `false`-delete branch stays local to each caller
+// (their rule containers differ: record vs `Map`). Internal: not re-exported
+// from `src/index.ts`.
+export function mergeRuleOptions(current: unknown, incoming: unknown): unknown {
+  return isMergeableObject(current) && isMergeableObject(incoming)
+    ? { ...current, ...incoming }
+    : incoming;
+}
+
 // ------------------------------------------------------------------------
 // Internal
 // ------------------------------------------------------------------------
@@ -129,13 +143,8 @@ function mergeRouteRule(
       delete routeRules[name];
       return;
     }
-    if (isMergeableObject(currentRule.options) && isMergeableObject(rule.options)) {
-      // Merge nested rule objects
-      currentRule.options = { ...currentRule.options, ...rule.options } as never;
-    } else {
-      // Override rule if non-object
-      currentRule.options = rule.options as never;
-    }
+    // Merge nested rule objects, override non-objects
+    currentRule.options = mergeRuleOptions(currentRule.options, rule.options) as never;
     // Routing (route and params)
     currentRule.route = rule.route;
     currentRule.method = rule.method;

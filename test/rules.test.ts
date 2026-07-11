@@ -133,6 +133,33 @@ describe("redirect rule", () => {
     expect(res.headers.get("location")).toBe("/base?a=1&b=2");
   });
 
+  it("preserves duplicate query keys on non-wildcard targets", async () => {
+    // The raw search string is forwarded — never a key/value object round-trip,
+    // which would collapse `tag=a&tag=b` to the last value.
+    const app = createApp({ "/rules/redirect": { redirect: "/base" } });
+    const res = await app.fetch(new Request("http://test/rules/redirect?tag=a&tag=b"));
+    expect(res.headers.get("location")).toBe("/base?tag=a&tag=b");
+  });
+
+  it("keeps target-baked query params ahead of appended request params", async () => {
+    // Semantics: the target's own query is kept first; the request's raw query
+    // is appended after it (both multi-valued-safe — no clobbering).
+    const app = createApp({ "/rules/redirect": { redirect: "/base?x=0" } });
+    const res = await app.fetch(new Request("http://test/rules/redirect?x=9&y=2"));
+    expect(res.headers.get("location")).toBe("/base?x=0&x=9&y=2");
+    // no request query → target forwarded verbatim
+    const bare = await app.fetch(new Request("http://test/rules/redirect"));
+    expect(bare.headers.get("location")).toBe("/base?x=0");
+  });
+
+  it("preserves query encoding on non-wildcard targets", async () => {
+    // `%2B` must stay `%2B` (a decode/re-encode round-trip would turn it into
+    // a literal `+`, i.e. a space for the upstream).
+    const app = createApp({ "/rules/redirect": { redirect: "/base" } });
+    const res = await app.fetch(new Request("http://test/rules/redirect?q=a%2Bb&r=1%202"));
+    expect(res.headers.get("location")).toBe("/base?q=a%2Bb&r=1%202");
+  });
+
   it("appends the matched tail for /** targets (base stripped)", async () => {
     const app = createApp({
       "/rules/redirect/wildcard/**": { redirect: "https://h3.dev/**" },
@@ -217,6 +244,23 @@ describe("proxy rule", () => {
     app.get("/api/echo", (event) => ({ q: event.url.search }));
     const res = await app.fetch(new Request("http://test/api/proxy/anything?x=1"));
     expect(await res.json()).toEqual({ q: "?x=1" });
+  });
+
+  it("preserves duplicate keys and encoding on non-wildcard proxy targets", async () => {
+    const app = createApp({ "/api/proxy/**": { proxy: "/api/echo" } });
+    app.get("/api/echo", (event) => ({ q: event.url.search }));
+    const res = await app.fetch(new Request("http://test/api/proxy/x?tag=a&tag=b&q=a%2Bb"));
+    expect(await res.json()).toEqual({ q: "?tag=a&tag=b&q=a%2Bb" });
+  });
+
+  it("appends request params after a proxy target's baked-in query", async () => {
+    const app = createApp({ "/api/proxy/**": { proxy: "/api/echo?fixed=1" } });
+    app.get("/api/echo", (event) => ({ q: event.url.search }));
+    const res = await app.fetch(new Request("http://test/api/proxy/x?fixed=9&y=2"));
+    expect(await res.json()).toEqual({ q: "?fixed=1&fixed=9&y=2" });
+    // no request query → target's own query forwarded verbatim
+    const bare = await app.fetch(new Request("http://test/api/proxy/x"));
+    expect(await bare.json()).toEqual({ q: "?fixed=1" });
   });
 
   it("forwards the raw encoded pathname (opaque %2f stays one segment)", async () => {

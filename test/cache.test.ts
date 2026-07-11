@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { routeRules } from "../src/h3.ts";
 import type { RouteRuleConfig, RuleHandler } from "../src/types.ts";
 import { createCacheRuleHandler } from "../src/rules/cache.ts";
-import { cache, createCacheRuleHandler as createOcacheRuleHandler } from "../src/cache.ts";
+import { cache, createOcacheRuleHandler } from "../src/cache.ts";
 import type { OcacheRuleHandlerOptions } from "../src/cache.ts";
 
 const createApp = (config: Record<string, RouteRuleConfig>, cacheHandler: RuleHandler<"cache">) => {
@@ -150,6 +150,91 @@ describe("cache rule (ocache-backed, h3-rules/cache)", () => {
     // and the cache still serves authorized requests
     const okAgain = await app.fetch(new Request("http://test/cached-auth/a", { headers: auth }));
     expect(await okAgain.json()).toEqual({ calls: 1 });
+  });
+
+  it("never bakes reflected CORS headers into the shared cache (cors + swr)", async () => {
+    // The `cors` rule (order -3) appends per-request headers — an
+    // `access-control-allow-origin` reflected from the request Origin — before
+    // the cache handler serializes the response. Storing them would serve the
+    // first requester's origin to everyone (the entry's own `vary: origin`
+    // forbids that, RFC 9111 §4.1) — with credentials, a cross-origin leak.
+    let calls = 0;
+    const app = createApp(
+      {
+        "/cached-cors/**": {
+          cors: { origin: ["https://a.com"], credentials: true },
+          swr: true,
+          cache: { maxAge: 60 },
+        },
+      },
+      createOcacheRuleHandler(),
+    );
+    app.get("/cached-cors/:id", () => ({ calls: ++calls }));
+
+    // miss, allowed origin: live response carries its correct CORS headers
+    const first = await app.fetch(
+      new Request("http://test/cached-cors/a", { headers: { origin: "https://a.com" } }),
+    );
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ calls: 1 });
+    expect(first.headers.get("access-control-allow-origin")).toBe("https://a.com");
+    expect(first.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(first.headers.get("vary")).toMatch(/origin/i);
+
+    // hit, different origin: must NOT receive the first requester's origin
+    const evil = await app.fetch(
+      new Request("http://test/cached-cors/a", { headers: { origin: "https://evil.com" } }),
+    );
+    expect(await evil.json()).toEqual({ calls: 1 }); // served from cache
+    expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+    // `access-control-allow-credentials` is appended live by the cors rule on
+    // every request (h3 reflects the *config*, not the origin — identical to
+    // an uncached route); without an allow-origin it grants nothing.
+    expect(evil.headers.get("access-control-allow-credentials")).toBe("true");
+
+    // hit, absent origin: no CORS headers either
+    const none = await app.fetch(new Request("http://test/cached-cors/a"));
+    expect(await none.json()).toEqual({ calls: 1 });
+    expect(none.headers.get("access-control-allow-origin")).toBeNull();
+
+    // hit, allowed origin: still gets its correct CORS headers
+    const okHit = await app.fetch(
+      new Request("http://test/cached-cors/a", { headers: { origin: "https://a.com" } }),
+    );
+    expect(await okHit.json()).toEqual({ calls: 1 });
+    expect(okHit.headers.get("access-control-allow-origin")).toBe("https://a.com");
+    expect(okHit.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(okHit.headers.get("vary")).toMatch(/origin/i);
+    expect(calls).toBe(1);
+  });
+
+  it("serves conditional 304s with etag/cache-control and `headers`-rule headers", async () => {
+    // RFC 9110 §15.4.5: a 304 must carry what the 200 would. ocache's
+    // revalidation path builds a bare 304 Response, and h3's `prepareResponse`
+    // only merges `event.res.headers` into 2xx Response instances — the glue
+    // must hand back a mergeable response so the conditional headers set by
+    // `handleCacheHeaders` and by `headers` rules reach the client.
+    let calls = 0;
+    const app = createApp(
+      { "/cached-304/**": { cache: { maxAge: 60 }, headers: { "x-rule": "1" } } },
+      createOcacheRuleHandler(),
+    );
+    app.get("/cached-304/:id", () => ({ calls: ++calls }));
+
+    const first = await app.fetch(new Request("http://test/cached-304/a"));
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+
+    const revalidated = await app.fetch(
+      new Request("http://test/cached-304/a", { headers: { "if-none-match": etag! } }),
+    );
+    expect(revalidated.status).toBe(304);
+    expect(await revalidated.text()).toBe("");
+    expect(revalidated.headers.get("etag")).toBe(etag);
+    expect(revalidated.headers.get("cache-control")).toBeTruthy();
+    expect(revalidated.headers.get("x-rule")).toBe("1");
+    expect(calls).toBe(1);
   });
 
   // NOTE: keep this test last in this describe — the `storage` option mutates

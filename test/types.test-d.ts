@@ -12,7 +12,19 @@ import type {
   MatchedRouteRules,
   RouteRuleConfig,
   RouteRules,
+  RuleHandler,
 } from "../src/types.ts";
+
+// --- `RuleHandler.order` is numeric-only (the "pre"/"post" sugar is removed;
+// built-in bands: cors -3, basicAuth -2, headers -1, default 0) ---
+
+expectTypeOf<RuleHandler["order"]>().toEqualTypeOf<number | undefined>();
+
+// --- `routeRules()` accepts matcher options plus `memoize` ---
+
+routeRules({}, { memoize: false });
+routeRules({}, { memoize: { max: 256 } });
+routeRules({}, { baseURL: "/app", preMerge: true, memoize: true });
 
 // --- Vendored `CacheRuleOptions` stays ocache-compatible ---
 
@@ -61,9 +73,9 @@ void known;
 // --- Compiler input: authored config or already-normalized rules ---
 
 // The compiler normalizes internally, so both shapes are valid input without a
-// cast. Note the `RouteRules` side of the union is open (index signature), so
-// the closed-interface typo check does not apply at the compiler boundary —
-// authoring config inline keeps typo safety only via the other entry points.
+// cast — normalized output with built-in keys is structurally assignable to
+// `RouteRuleConfig`. The closed-interface typo check applies at the compiler
+// boundary too (pinned in test/compiler.test-d.ts).
 compileRouteRules({ "/api/**": { swr: 60, cors: true } });
 compileRouteRules(normalizeRouteRules({ "/api/**": { swr: 60 } }));
 

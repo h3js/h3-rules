@@ -197,12 +197,19 @@ export type MatchedRouteRules = {
 /**
  * A rule handler: `handler` constructs an H3 {@link Middleware} from a matched
  * rule, and the optional `order` controls execution order relative to other
- * rules — lower runs first. The shorthands `"pre"` (`-1`) and `"post"` (`1`) sit
- * on either side of the default (`0`, when omitted); a `number` gives finer
- * control (e.g. `-2` to run before `"pre"`).
+ * rules — lower runs first; the default (when omitted) is `0`.
+ *
+ * The built-in handlers occupy the negative band, outermost first:
+ * - `cors`: `-3` (answers preflights before the auth gate)
+ * - `basicAuth`: `-2` (gates before headers/cache/redirect/proxy)
+ * - `headers`: `-1` (applies over inner responses)
+ * - everything else (`cache`, `redirect`, `proxy`, custom): `0`
+ *
+ * Pick a number relative to these bands — e.g. `-4` runs outside `cors`,
+ * `-1.5` between `basicAuth` and `headers`, `1` after all built-ins.
  */
 export interface RuleHandler<K extends RouteRuleName = RouteRuleName> {
-  order?: "pre" | "post" | number;
+  order?: number;
   handler: (matched: MatchedRouteRule<K>) => Middleware;
 }
 

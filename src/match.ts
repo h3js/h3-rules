@@ -188,6 +188,9 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
     const canonicalLayers = canonical === pathname ? undefined : findRouteRules(method, canonical);
 
     if (!rawLayers?.length && !canonicalLayers?.length) {
+      // Fresh objects on purpose: only *memoized* results are documented as
+      // shared/read-only — un-memoized consumers may mutate the result. Hot
+      // no-match paths hit the memo when composed with memoizeRouteRulesMatcher.
       return { routeRules: {}, routeRuleMiddleware: [] };
     }
 
@@ -205,14 +208,14 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
 
     // Build the ordered middleware array from merged rules. Rules without a
     // handler (data-only) are skipped; handlers run sorted by `order` ascending
-    // (`"pre"` = -1, `"post"` = 1, default 0, or an explicit number) — `basicAuth`
-    // is `"pre"` so unauthorized requests are neither redirected nor proxied;
-    // `headers` is also `"pre"` so it runs outer to `cache`/`redirect`/`proxy` and
-    // its headers land on the final response — see `src/rules/headers.ts`.
+    // (a number, lower first, default 0) — `basicAuth` is -2 so unauthorized
+    // requests are neither redirected nor proxied; `headers` is -1 so it runs
+    // outer to `cache`/`redirect`/`proxy` and its headers land on the final
+    // response — see `src/rules/headers.ts`. Skip the sort for 0/1 rules.
     const routeRuleMiddleware: MatchResult["routeRuleMiddleware"] = [];
-    const orderedRules = (Object.values(routeRules) as MatchedRouteRule[]).sort(
-      (a, b) => orderWeight(a.handler) - orderWeight(b.handler),
-    );
+    const matchedRules = Object.values(routeRules) as MatchedRouteRule[];
+    const orderedRules =
+      matchedRules.length > 1 ? matchedRules.sort(compareRuleOrder) : matchedRules;
     for (const rule of orderedRules) {
       // merged rule sets never contain `false` options (types.ts: MatchedRouteRule)
       if (!rule.handler) {
@@ -289,12 +292,15 @@ function requireOptInHandler(
   }
 }
 
-// Sort weight for a handler's `order` (lower runs first): a `number` is used
-// as-is, `"pre"` is -1, `"post"` is 1, and the default (omitted / data-only
-// rules with no handler) is 0.
+// Sort comparator for matched rules by handler `order` (lower runs first;
+// omitted / data-only rules with no handler default to 0). Built-ins occupy
+// the negative band: `cors` -3, `basicAuth` -2, `headers` -1 (see types.ts
+// `RuleHandler`). Module-scope const so it is not re-allocated per request.
+const compareRuleOrder = (a: MatchedRouteRule, b: MatchedRouteRule): number =>
+  orderWeight(a.handler) - orderWeight(b.handler);
+
 function orderWeight(handler: RuleHandler | undefined): number {
-  const order = handler?.order;
-  return typeof order === "number" ? order : order === "pre" ? -1 : order === "post" ? 1 : 0;
+  return handler?.order ?? 0;
 }
 
 // The `redirect`/`proxy` scope check (`resolveRuleTarget`) runs against the full

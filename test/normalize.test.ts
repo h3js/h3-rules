@@ -151,6 +151,71 @@ describe("normalizeRouteRules - cors", () => {
     const rules = normalizeRouteRules({ "/api/**": { cors: true } });
     expect(rules["/api/**"]!).not.toHaveProperty("swr");
   });
+
+  // Per the Fetch spec, `Access-Control-Allow-Origin: *` is unusable with
+  // credentialed requests — h3 would emit both headers plus a console.warn on
+  // every request. Normalization runs once at startup/build, so it throws.
+  describe("credentials + wildcard origin misconfiguration", () => {
+    it("throws on credentials: true with no origin (h3 defaults to `*`)", () => {
+      expect(() => normalizeRouteRules({ "/api/**": { cors: { credentials: true } } })).toThrow(
+        /`cors` rule for `\/api\/\*\*`.*wildcard origin/,
+      );
+    });
+
+    it("throws on credentials: true with origin '*'", () => {
+      expect(() =>
+        normalizeRouteRules({ "/api/**": { cors: { credentials: true, origin: "*" } } }),
+      ).toThrow(/credentials: true.*wildcard origin/);
+    });
+
+    it("throws on credentials: true with '*' in an origin array", () => {
+      expect(() =>
+        normalizeRouteRules({
+          "/api/**": { cors: { credentials: true, origin: ["https://a.com", "*"] } },
+        }),
+      ).toThrow(/wildcard origin/);
+    });
+
+    it("names the canonical rule key in the error", () => {
+      expect(() => normalizeRouteRules({ "get /x": { cors: { credentials: true } } })).toThrow(
+        /`cors` rule for `GET \/x`/,
+      );
+    });
+
+    it("passes with an explicit origin allowlist", () => {
+      const rules = normalizeRouteRules({
+        "/api/**": { cors: { credentials: true, origin: ["https://a.com"] } },
+      });
+      expect(rules["/api/**"]!.cors).toEqual({
+        credentials: true,
+        origin: ["https://a.com"],
+      });
+    });
+
+    it("passes with a function origin (validated dynamically, not statically)", () => {
+      const origin = (o: string) => o === "https://a.com";
+      const rules = normalizeRouteRules({
+        "/api/**": { cors: { credentials: true, origin } },
+      });
+      expect(rules["/api/**"]!.cors).toEqual({ credentials: true, origin });
+    });
+
+    it("passes with the literal 'null' origin (not a wildcard)", () => {
+      const rules = normalizeRouteRules({
+        "/api/**": { cors: { credentials: true, origin: "null" } },
+      });
+      expect(rules["/api/**"]!.cors).toEqual({ credentials: true, origin: "null" });
+    });
+
+    it("does not throw without credentials (wildcard origin alone is fine)", () => {
+      const rules = normalizeRouteRules({
+        "/api/**": { cors: { origin: "*" } },
+        "/other/**": { cors: true },
+      });
+      expect(rules["/api/**"]!.cors).toEqual({ origin: "*" });
+      expect(rules["/other/**"]!.cors).toEqual({});
+    });
+  });
 });
 
 describe("normalizeRouteRules - misc", () => {
@@ -232,6 +297,11 @@ describe("normalizeRouteRules - idempotency", () => {
     const once = normalizeRouteRules(FIXTURE);
     const twice = normalizeRouteRules(once as Record<string, RouteRuleConfig>);
     expect(twice).toEqual(once);
+    // Byte-level pin including key order: the compiler normalizes in a single
+    // pass and pins byte-identical output for authored vs pre-normalized
+    // input (test/compiler.test.ts), which requires the key-order fixed point
+    // to be reached on the first pass.
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
   });
 
   it("re-normalizing preserves reset markers and shortcut expansions", () => {

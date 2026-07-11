@@ -16,12 +16,15 @@ import type { RuleHandler } from "../types.ts";
 // throws before `headers` runs, so unauthorized responses never carry these.
 export const headers: RuleHandler<"headers"> = {
   order: -1,
-  handler: (m) =>
-    async function headersRouteRule(event, next) {
+  handler: (m) => {
+    // Rule options are static — flatten them once per handler, not per request.
+    const entries = Object.entries(m.options || {});
+    return async function headersRouteRule(event, next) {
       const response = await next();
-      for (const [key, value] of Object.entries(m.options || {})) {
+      for (const [key, value] of entries) {
         event.res.headers.set(key, value);
       }
       return response;
-    },
+    };
+  },
 };

@@ -7,23 +7,26 @@
 
 import { proxyRequest } from "h3";
 import type { ProxyRuleOptions, RuleHandler } from "./types.ts";
-import { resolveRuleTarget } from "./rules/_utils.ts";
+import { prepareRuleTarget } from "./rules/_utils.ts";
 
 /**
  * Proxy rule handler: forwards the request to the rule's `to` target. For `/**`
  * wildcard targets the raw `event.url.pathname` is forwarded (encoded
  * separators stay opaque) after the shared scope check — see
- * {@link resolveRuleTarget}. Registered per matcher (`handlers: { proxy }`); no
+ * {@link prepareRuleTarget}. Registered per matcher (`handlers: { proxy }`); no
  * shared instance is needed since the handler holds no state.
  */
 export const proxy: RuleHandler<"proxy"> = {
-  handler: (m) =>
-    function proxyRouteRule(event) {
-      const options = m.options as ProxyRuleOptions | undefined;
-      const target = resolveRuleTarget(event, options);
-      if (!target) {
-        return;
-      }
-      return proxyRequest(event, target, { ...options });
-    },
+  handler: (m) => {
+    const options = m.options as ProxyRuleOptions | undefined;
+    // Static `to`-derived work happens once per handler; the resolver only
+    // performs the request-dependent parts (scope checks, query forwarding).
+    const resolveTarget = prepareRuleTarget(options);
+    if (!resolveTarget) {
+      return function proxyRouteRule() {};
+    }
+    return function proxyRouteRule(event) {
+      return proxyRequest(event, resolveTarget(event), { ...options });
+    };
+  },
 };

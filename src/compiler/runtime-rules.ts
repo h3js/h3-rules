@@ -1,29 +1,30 @@
 /**
- * Rule names with a runtime handler in `h3-rules`. Data-only / custom rules are
- * serialized without a `handler` reference. Keep in sync with `ruleHandlers`
- * (src/rules/index.ts) — plus the opt-in subpath handlers `cache`
- * (`h3-rules/cache`) and `proxy` (`h3-rules/proxy`), which are runtime rules but
- * not registry entries (see {@link SUBPATH_RULE_SOURCES}).
+ * Default `runtimeRules` preset: every built-in rule handler imported from
+ * `h3-rules` under its own name — except the opt-in subpath handlers `cache`
+ * (`h3-rules/cache`) and `proxy` (`h3-rules/proxy`), so their dependencies
+ * (ocache, h3's `proxyRequest`) only enter a compiled bundle when the rule is
+ * used. A caller's `runtimeRules` is merged **over** this (see
+ * {@link resolveRuntimeRules}), so consumers only list additions and overrides —
+ * they never need to re-declare the built-ins. Keep the key set in sync with
+ * `ruleHandlers` (src/rules/index.ts) plus the two subpath handlers.
  */
-export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
-  "headers",
-  "redirect",
-  "proxy",
-  "cache",
-  "basicAuth",
-  "cors",
-]);
+export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze({
+  headers: "h3-rules",
+  redirect: "h3-rules",
+  proxy: "h3-rules/proxy",
+  cache: "h3-rules/cache",
+  basicAuth: "h3-rules",
+  cors: "h3-rules",
+});
 
 /**
- * Built-in rules whose handler is not exported from the `h3-rules` entry but
- * from a dedicated subpath, so its dependency (ocache for `cache`, h3's
- * `proxyRequest` for `proxy`) only enters a compiled bundle when the rule is
- * used. Every other built-in imports from `h3-rules`.
+ * Rule names with a built-in runtime handler (the {@link DEFAULT_RUNTIME_RULES}
+ * key set). Data-only / custom rules are serialized without a `handler`
+ * reference.
  */
-export const SUBPATH_RULE_SOURCES: Readonly<Record<string, string>> = Object.freeze({
-  cache: "h3-rules/cache",
-  proxy: "h3-rules/proxy",
-});
+export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze(
+  Object.keys(DEFAULT_RUNTIME_RULES),
+);
 
 /**
  * Where a runtime rule's handler is imported from in generated code: either a
@@ -55,21 +56,6 @@ export interface RuntimeRuleImportSpec {
    */
   export?: string;
 }
-
-/**
- * Default `runtimeRules` preset: every built-in rule handler imported from
- * `h3-rules` under its own name — except the opt-in subpath handlers `cache`
- * (`h3-rules/cache`) and `proxy` (`h3-rules/proxy`), so their dependencies
- * (ocache, h3's `proxyRequest`) only enter a compiled bundle when the rule is
- * used (see {@link SUBPATH_RULE_SOURCES}). A caller's `runtimeRules` is merged
- * **over** this (see {@link resolveRuntimeRules}), so consumers only list
- * additions and overrides — they never need to re-declare the built-ins.
- */
-export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze(
-  Object.fromEntries(
-    RUNTIME_RULE_NAMES.map((name) => [name, SUBPATH_RULE_SOURCES[name] ?? "h3-rules"]),
-  ),
-);
 
 /**
  * The effective runtime-rule set: the caller's `runtimeRules` merged over

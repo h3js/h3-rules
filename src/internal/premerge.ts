@@ -1,5 +1,5 @@
 import { compareRoutes } from "rou3";
-import { isMergeableObject } from "../merge.ts";
+import { mergeRuleOptions } from "../merge.ts";
 import type { RouteRuleEntry } from "../merge.ts";
 
 /**
@@ -137,10 +137,7 @@ function mergeChainRule(merged: Map<string, ChainRule>, entry: RouteRuleEntry): 
       merged.delete(entry.name);
       return;
     }
-    current.options =
-      isMergeableObject(current.options) && isMergeableObject(entry.options)
-        ? { ...current.options, ...entry.options }
-        : entry.options;
+    current.options = mergeRuleOptions(current.options, entry.options);
     current.route = entry.route;
     current.method = entry.method;
     if (!current.paramRoutes.includes(entry.route)) {
