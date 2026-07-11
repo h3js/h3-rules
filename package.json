@@ -1,6 +1,6 @@
 {
   "name": "h3-rules",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Declarative route rules (redirect, proxy, headers, cache, basic auth, CORS) for H3 v2 — runtime-agnostic, extracted from Nitro.",
   "keywords": [
     "cache",
