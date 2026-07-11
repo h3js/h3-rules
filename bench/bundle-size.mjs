@@ -23,7 +23,7 @@
 // (handler imports + `findRouteRules` + the `createMatcherFromFind` export):
 //
 // - <mode>.entry.mjs                    — the bundled entry point
-// - <mode>.bundle.mjs                   — readable bundle: h3 + ocache external,
+// - <mode>.bundle.mjs                   — readable bundle: h3 external,
 //                                         unminified for reading
 //
 // The measured bundle (minified, h3 external) is built in memory only — we just
@@ -105,19 +105,19 @@ async function measure(variant) {
     alias: { "h3-rules": srcIndex, "h3-rules/cache": srcCache },
     logLevel: "silent",
   };
-  // Measured bundle: what the table reports — minified, `h3` external. ocache
-  // stays inlined here so the table's ocache column can measure it. Kept
-  // in-memory only (we just need its size); not written to disk.
+  // Measured bundle: what the table reports — minified, `h3` external (ocache
+  // inlined so the table's ocache column can measure it). Kept in-memory only
+  // (we just need its size); not written to disk.
   const measured = await build({ ...shared, minify: true, external: ["h3"] });
-  // Readable bundle: unminified with h3 + ocache external, so the shipped
-  // h3-rules code can be read directly. Not what the table measures — this is
-  // the one written to disk, for inspection.
+  // Readable bundle: the same module graph unminified, written to disk for
+  // inspection. Same externals as the measured bundle — ocache is inlined,
+  // since only the cache rule pulls it and there it IS the shipped footprint.
   const readable = await build({
     ...shared,
     minify: false,
-    external: ["h3", "ocache"],
+    external: ["h3"],
     banner: {
-      js: `// ${variant.rule} (${variant.mode}) — readable bundle: h3 + ocache external, unminified.`,
+      js: `// ${variant.rule} (${variant.mode}) — readable bundle: h3 external, unminified.`,
     },
   });
   const output = measured.outputFiles[0].contents;
@@ -193,6 +193,6 @@ console.log(
     `\ncompiled mode drops the rou3 router and imports only the used handler + its deps.` +
     `\nruntime +preMerge shares the runtime bundle (flag only).` +
     `\nbench/.generated/rules/<rule>/ has entries and readable bundles` +
-    `\n(*.bundle.mjs, h3 + ocache external, unminified); the measured minified` +
+    `\n(*.bundle.mjs, h3 external, unminified); the measured minified` +
     `\nbundle is sized in memory and not written.`,
 );
