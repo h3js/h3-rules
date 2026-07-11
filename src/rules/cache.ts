@@ -1,67 +1,45 @@
-import { defineHandler, handleCacheHeaders, toResponse } from "h3";
-import type { EventHandler, H3Event } from "h3";
-import { defineCachedHandler as ocacheDefineCachedHandler, setStorage } from "ocache";
-import type { CachedEventHandlerOptions, StorageInterface } from "ocache";
-import type { RuleHandler } from "../types.ts";
+import type { EventHandler } from "h3";
+import type { CacheRuleOptions, RuleHandler } from "../types.ts";
 
 /**
- * A `defineCachedHandler`-compatible function: wraps an event handler so its
- * responses are cached. This is the injection point for consumers (e.g. Nitro)
- * that want their own storage / `useStorage()` wiring and cache conventions.
+ * Wraps an event handler so its responses are cached. This is the core
+ * injection point: `h3-rules` itself ships no caching implementation — the
+ * ocache-backed one lives in `h3-rules/cache` (optional `ocache` peer), and
+ * consumers with their own cache conventions (e.g. Nitro's unstorage /
+ * `useStorage()` wiring) inject theirs here instead.
+ *
+ * `opts` is the merged rule options plus the generated `group`/`name` key —
+ * advanced implementation options passed through `defaults` reach it as extra
+ * properties (typed at the call site, e.g. ocache's in `h3-rules/cache`).
  */
-export type DefineCachedHandler = (
-  handler: EventHandler,
-  opts: CachedEventHandlerOptions,
-) => EventHandler;
+export type DefineCachedHandler = (handler: EventHandler, opts: CacheRuleOptions) => EventHandler;
 
 /**
- * `cache` option for the matcher / `routeRules()`. All fields are optional; the
- * default uses ocache's in-memory storage out of the box.
+ * Options for {@link createCacheRuleHandler}. `defineCachedHandler` is
+ * required — the core has no default caching implementation.
  */
-export interface CacheRuleOptions {
-  /**
-   * Full replacement for how cached handlers are created. When set, `storage`
-   * and `defaults` below are ignored — the consumer owns the wiring. This is
-   * what Nitro injects to keep its unstorage + `useStorage()` cache setup.
-   */
-  defineCachedHandler?: DefineCachedHandler;
-  /** ocache storage implementation (minimal `get`/`set`). Applied via `setStorage`. */
-  storage?: StorageInterface;
-  /** Default ocache options merged into every cache rule (rule options win). */
-  defaults?: CachedEventHandlerOptions;
+export interface CacheRuleHandlerOptions {
+  /** Creates the cached wrapper for a matched route handler. */
+  defineCachedHandler: DefineCachedHandler;
+  /** Default options merged into every cache rule (rule options win). */
+  defaults?: CacheRuleOptions;
 }
 
 const CACHE_GROUP = "h3-rules/route-rules";
 
-// Build the effective `defineCachedHandler` for a matcher instance. Defaults to
-// ocache wired with h3's `toResponse` / `handleCacheHeaders` so h3 handler return
-// values (objects, streams, …) serialize with full fidelity. No srvx / unstorage
-// dependency — global Response and ocache's in-memory storage by default.
-function resolveDefineCachedHandler(opts: CacheRuleOptions | undefined): DefineCachedHandler {
-  if (opts?.defineCachedHandler) {
-    return opts.defineCachedHandler;
-  }
-  if (opts?.storage) {
-    setStorage(opts.storage);
-  }
-  return (handler, cachedOpts) => {
-    const ocacheHandler = ocacheDefineCachedHandler(handler, {
-      toResponse: (value, event) => toResponse(value, event as H3Event),
-      handleCacheHeaders: (event, conditions) => handleCacheHeaders(event as H3Event, conditions),
-      ...cachedOpts,
-    });
-    return defineHandler((event) => ocacheHandler(event));
-  };
-}
-
 /**
- * Create the `cache` rule handler for a matcher instance. Memoization of wrapped
- * handlers is **instance-scoped** (a closure `Map`, not a `globalThis` map), so
- * each matcher wraps a given route exactly once across requests.
+ * Create the `cache` rule handler for a matcher instance from an injected
+ * `defineCachedHandler`. Memoization of wrapped handlers is **instance-scoped**
+ * (a closure `Map`, not a `globalThis` map), so each matcher wraps a given
+ * route exactly once across requests.
+ *
+ * For the ready-made ocache-backed handler, use `h3-rules/cache` instead:
+ * its `cache` export / `createCacheRuleHandler(opts)` wire ocache with h3's
+ * `toResponse` / `handleCacheHeaders` glue.
  */
-export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"cache"> {
-  const defineCached = resolveDefineCachedHandler(opts);
-  const defaults = opts?.defaults;
+export function createCacheRuleHandler(opts: CacheRuleHandlerOptions): RuleHandler<"cache"> {
+  const defineCached = opts.defineCachedHandler;
+  const defaults = opts.defaults;
   const cachedHandlers = new Map<string, EventHandler>();
 
   return {
@@ -78,7 +56,7 @@ export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"ca
             group: CACHE_GROUP,
             name: key,
             ...defaults,
-            ...(m.options as CachedEventHandlerOptions),
+            ...m.options,
           });
           cachedHandlers.set(key, cachedHandler);
         }
@@ -86,14 +64,3 @@ export function createCacheRuleHandler(opts?: CacheRuleOptions): RuleHandler<"ca
       },
   };
 }
-
-/**
- * Shared default `cache` rule handler — the registry entry and the named export
- * compiled matchers import (`import { cache … } from "h3-rules"`), so its
- * memoization is module-scoped. Runtime matchers replace it with an
- * instance-scoped handler (see `createRouteRulesMatcher`); compiled consumers
- * needing custom wiring point their own `createCacheRuleHandler(opts)` instance
- * at the `cache` handler via the compiler's `runtimeRules` override
- * (`{ cache: "#your/cache" }`, merged over the built-in preset).
- */
-export const cache: RuleHandler<"cache"> = /* @__PURE__ */ createCacheRuleHandler();

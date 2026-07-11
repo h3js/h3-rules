@@ -3,10 +3,25 @@
 // failing `expectTypeOf`, fails the build. Not run by vitest (`.test-d.ts` does
 // not match the runtime test glob); it declares no runtime behavior.
 import { expectTypeOf } from "vitest";
+import type { CachedEventHandlerOptions } from "ocache";
 import { compileRouteRules } from "../src/compiler.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { routeRules } from "../src/h3.ts";
-import type { MatchedRouteRules, RouteRuleConfig, RouteRules } from "../src/types.ts";
+import type {
+  CacheRuleOptions,
+  MatchedRouteRules,
+  RouteRuleConfig,
+  RouteRules,
+} from "../src/types.ts";
+
+// --- Vendored `CacheRuleOptions` stays ocache-compatible ---
+
+// The core cache rule schema is vendored (no ocache import in runtime types).
+// Every field must remain assignable to ocache's `CachedEventHandlerOptions` —
+// the `h3-rules/cache` glue spreads rule options straight into ocache options.
+expectTypeOf<Required<CacheRuleOptions>>().toMatchTypeOf<CachedEventHandlerOptions>();
+// ...and its key set must not drift outside ocache's option names.
+expectTypeOf<keyof CacheRuleOptions>().toMatchTypeOf<keyof CachedEventHandlerOptions>();
 
 // --- `RouteRuleConfig` is a closed interface: typos are compile errors ---
 

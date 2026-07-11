@@ -1,7 +1,8 @@
 /**
  * Rule names with a runtime handler in `h3-rules`. Data-only / custom rules are
  * serialized without a `handler` reference. Keep in sync with `ruleHandlers`
- * (src/rules/index.ts).
+ * (src/rules/index.ts) — plus `cache`, whose handler is the `h3-rules/cache`
+ * subpath export rather than a registry entry.
  */
 export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
   "headers",
@@ -44,12 +45,17 @@ export interface RuntimeRuleImportSpec {
 
 /**
  * Default `runtimeRules` preset: every built-in rule handler imported from
- * `h3-rules` under its own name. A caller's `runtimeRules` is merged **over**
- * this (see {@link resolveRuntimeRules}), so consumers only list additions and
- * overrides — they never need to re-declare the built-ins.
+ * `h3-rules` under its own name — except `cache`, whose ocache-backed handler
+ * lives in the `h3-rules/cache` subpath (so ocache, an optional peer, only
+ * enters a compiled bundle when a cache rule is used). A caller's
+ * `runtimeRules` is merged **over** this (see {@link resolveRuntimeRules}), so
+ * consumers only list additions and overrides — they never need to re-declare
+ * the built-ins.
  */
 export const DEFAULT_RUNTIME_RULES: Readonly<Record<string, RuntimeRuleImport>> = Object.freeze(
-  Object.fromEntries(RUNTIME_RULE_NAMES.map((name) => [name, "h3-rules"])),
+  Object.fromEntries(
+    RUNTIME_RULE_NAMES.map((name) => [name, name === "cache" ? "h3-rules/cache" : "h3-rules"]),
+  ),
 );
 
 /**

@@ -15,19 +15,21 @@ import {
 } from "../src/match.ts";
 import type { FindRouteRules, RouteRulesMatcher } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
+import * as h3RulesCache from "../src/cache.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
-import { FIXTURE, PROBES, snapshotResult } from "./_fixture.ts";
+import { FIXTURE, FIXTURE_HANDLERS, PROBES, snapshotResult } from "./_fixture.ts";
 
-// Bind every registry handler as its `<ns>$<name>` local (superset of what any
-// generated code references — unused params are harmless; the "references
-// exactly the handlers the import emits" test below guards against the
-// generated code depending on a binding the real import would not provide).
+// Bind every fixture handler (registry + the `h3-rules/cache` handler) as its
+// `<ns>$<name>` local (superset of what any generated code references — unused
+// params are harmless; the "references exactly the handlers the import emits"
+// test below guards against the generated code depending on a binding the real
+// import would not provide).
 function evaluateFind(code: string): FindRouteRules {
-  const params = Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`);
+  const params = Object.keys(FIXTURE_HANDLERS).map((name) => `__ruleHandlers__$${name}`);
   // eslint-disable-next-line no-new-func
   return new Function(...params, `return (${code});`)(
-    ...Object.values(ruleHandlers),
+    ...Object.values(FIXTURE_HANDLERS),
   ) as FindRouteRules;
 }
 
@@ -44,7 +46,7 @@ function evaluateCompiled(config: Record<string, RouteRuleConfig>): RouteRulesMa
 // parameters, then returning the requested export. Exercises the generated
 // matcher wrapper end to end, not just its source string.
 function evaluateModule(mod: CompiledRouteRules, exportName = "matcher"): RouteRulesMatcher {
-  const handlerParams = Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`);
+  const handlerParams = Object.keys(FIXTURE_HANDLERS).map((name) => `__ruleHandlers__$${name}`);
   const body = mod.body.replace(/\bexport const /g, "const ");
   // eslint-disable-next-line no-new-func
   const factory = new Function(
@@ -54,14 +56,16 @@ function evaluateModule(mod: CompiledRouteRules, exportName = "matcher"): RouteR
     `${body}\nreturn ${exportName};`,
   );
   return factory(
-    ...Object.values(ruleHandlers),
+    ...Object.values(FIXTURE_HANDLERS),
     createMatcherFromFind,
     memoizeRouteRulesMatcher,
   ) as RouteRulesMatcher;
 }
 
 describe("compiler parity", () => {
-  const runtime = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
+  const runtime = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+    handlers: FIXTURE_HANDLERS,
+  });
   const compiled = evaluateCompiled(FIXTURE);
 
   it.each(PROBES)("compiled === runtime for %s %s", (method, pathname) => {
@@ -171,10 +175,12 @@ describe("generated code shape", () => {
     expect(code).toContain("handler:__rr__$redirect");
   });
 
-  it("DEFAULT_RUNTIME_RULES presets every built-in to the h3-rules source", () => {
+  it("DEFAULT_RUNTIME_RULES presets every built-in to its h3-rules source", () => {
     expect(Object.keys(DEFAULT_RUNTIME_RULES).sort()).toEqual([...RUNTIME_RULE_NAMES].sort());
     for (const name of RUNTIME_RULE_NAMES) {
-      expect(DEFAULT_RUNTIME_RULES[name]).toBe("h3-rules");
+      // `cache` lives in the subpath so ocache (optional peer) only enters a
+      // compiled bundle when a cache rule is used.
+      expect(DEFAULT_RUNTIME_RULES[name]).toBe(name === "cache" ? "h3-rules/cache" : "h3-rules");
     }
   });
 
@@ -324,7 +330,9 @@ describe("generated code shape", () => {
   });
 
   it("the generated matcher export resolves identically to the runtime matcher", () => {
-    const runtime = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
+    const runtime = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+      handlers: FIXTURE_HANDLERS,
+    });
     for (const matcher of [true, { memoize: true }, { memoize: { max: 8 } }] as const) {
       const compiled = evaluateModule(compileRouteRules(FIXTURE, { matcher }));
       for (const [method, pathname] of PROBES) {
@@ -335,15 +343,22 @@ describe("generated code shape", () => {
     }
   });
 
-  it("default RUNTIME_RULE_NAMES matches the ruleHandlers registry", () => {
-    expect([...RUNTIME_RULE_NAMES].sort()).toEqual(Object.keys(ruleHandlers).sort());
+  it("default RUNTIME_RULE_NAMES matches the ruleHandlers registry plus `cache`", () => {
+    // `cache` has a runtime handler but no registry entry — it is the
+    // `h3-rules/cache` subpath export instead.
+    expect([...RUNTIME_RULE_NAMES].sort()).toEqual([...Object.keys(ruleHandlers), "cache"].sort());
   });
 
-  it("every runtime rule handler is a named export of h3-rules", () => {
-    // The default handlers import id is "h3-rules": generated named imports
-    // must resolve to the exact registry handlers.
+  it("every runtime rule handler is a named export of its default source", () => {
+    // Generated named imports must resolve to the exact handler each source
+    // module exports: the registry handlers from "h3-rules", `cache` from
+    // "h3-rules/cache".
     for (const name of RUNTIME_RULE_NAMES) {
-      expect((h3Rules as Record<string, unknown>)[name], name).toBe(ruleHandlers[name]);
+      if (name === "cache") {
+        expect(h3RulesCache.cache, name).toBe(FIXTURE_HANDLERS.cache);
+      } else {
+        expect((h3Rules as Record<string, unknown>)[name], name).toBe(ruleHandlers[name]);
+      }
     }
   });
 
@@ -496,7 +511,8 @@ describe("input normalization", () => {
     // is not a runtime rule name, so no cache handler was imported and the
     // rule became data-only.
     expect(compileHandlersImport(config)).toBe(
-      'import { cache as __ruleHandlers__$cache, headers as __ruleHandlers__$headers, redirect as __ruleHandlers__$redirect } from "h3-rules";',
+      'import { headers as __ruleHandlers__$headers, redirect as __ruleHandlers__$redirect } from "h3-rules";\n' +
+        'import { cache as __ruleHandlers__$cache } from "h3-rules/cache";',
     );
     const code = compileFindRouteRules(config);
     expect(code).toContain('name:"cache"');

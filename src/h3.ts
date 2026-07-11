@@ -22,14 +22,18 @@ declare module "h3" {
  * ```ts
  * import { H3, serve } from "h3";
  * import { routeRules } from "h3-rules";
+ * import { cache } from "h3-rules/cache"; // needed for cache/swr rules (ocache peer)
  *
  * const app = new H3();
  * app.use(
- *   routeRules({
- *     "/blog/**": { swr: 60 },
- *     "/old/**": { redirect: { to: "/new/**", status: 301 } },
- *     "/api/**": { cors: true },
- *   }),
+ *   routeRules(
+ *     {
+ *       "/blog/**": { swr: 60 },
+ *       "/old/**": { redirect: { to: "/new/**", status: 301 } },
+ *       "/api/**": { cors: true },
+ *     },
+ *     { handlers: { cache } },
+ *   ),
  * );
  * ```
  */

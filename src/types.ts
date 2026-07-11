@@ -1,8 +1,49 @@
 import type { BasicAuthOptions, Middleware, ProxyOptions } from "h3";
-import type { CachedEventHandlerOptions } from "ocache";
 
 /** Valid HTTP status code (100–599). Kept loose (`number`) for portability. */
 export type HTTPStatus = number;
+
+/**
+ * `cache` rule options — the declarative caching schema owned by `h3-rules`.
+ *
+ * This is intentionally **not** imported from ocache: the core package has no
+ * ocache dependency (the ocache-backed handler lives in `h3-rules/cache`), and
+ * the rule schema must mean the same thing under any injected
+ * `defineCachedHandler` implementation. Every field is a (JSON-serializable)
+ * subset of ocache's `CachedEventHandlerOptions`, structurally compatible by
+ * a type-level test — implementation hooks (`getKey`, `shouldCache`,
+ * `getMaxAge`, …) are deliberately excluded: supply those through the cache
+ * handler factory's `defaults` (fully typed against ocache in `h3-rules/cache`)
+ * or augment this interface (see the README "Extending rule types" section).
+ */
+export interface CacheRuleOptions {
+  /** Cache name, part of the cache key. Defaults to `<rulePattern>:<matchedRoute>`. */
+  name?: string;
+  /** Cache key group prefix. Defaults to `"h3-rules/route-rules"`. */
+  group?: string;
+  /** Custom integrity value participating in cache invalidation. */
+  integrity?: unknown;
+  /** Number of seconds to cache the response. */
+  maxAge?: number;
+  /** Enable stale-while-revalidate: serve stale cache while refreshing in the background. */
+  swr?: boolean;
+  /** Maximum number of seconds a stale entry may be served while revalidating. */
+  staleMaxAge?: number;
+  /** Storage key base prefix(es). */
+  base?: string | string[];
+  /** Only handle conditional headers (304 responses) without caching full responses. */
+  headersOnly?: boolean;
+  /** Request header names that vary the cache key (e.g. `["accept-language"]`). */
+  varies?: string[] | readonly string[];
+  /** Allowlist of query parameter names that vary the cache key. */
+  allowQuery?: string[] | readonly string[];
+  /** Allowlist of cookie names that participate in caching (default: none). */
+  allowCookies?: string[] | readonly string[];
+  /** Whether to synthesize a `Cache-Control` response header (default `true`). */
+  sendCacheControl?: boolean;
+  /** Cache-status response header: `true` (`X-Cache`), a custom name, or `false`. */
+  cacheStatusHeader?: boolean | string;
+}
 
 /**
  * Route rule options as authored by the user (input to {@link normalizeRouteRules}).
@@ -29,8 +70,11 @@ export interface RouteRuleConfig {
    * Enable runtime caching. When set to an options object, the matched route
    * handler is wrapped with a cached handler. Set to `false` to disable caching
    * inherited from a less-specific pattern.
+   *
+   * Requires a registered `cache` rule handler: the ocache-backed one from
+   * `h3-rules/cache`, or your own via `createCacheRuleHandler`.
    */
-  cache?: Omit<CachedEventHandlerOptions, "toResponse" | "createResponse"> | false;
+  cache?: CacheRuleOptions | false;
 
   /** Response headers to set for matching routes. */
   headers?: Record<string, string>;
@@ -88,7 +132,7 @@ export interface RouteRules {
   headers?: Record<string, string>;
   redirect?: RedirectRuleOptions | false;
   proxy?: ProxyRuleOptions | false;
-  cache?: Omit<CachedEventHandlerOptions, "toResponse" | "createResponse"> | false;
+  cache?: CacheRuleOptions | false;
   basicAuth?: Pick<BasicAuthOptions, "password" | "username" | "realm"> | false;
   [key: string]: unknown;
 }

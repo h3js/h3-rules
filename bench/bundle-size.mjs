@@ -39,6 +39,7 @@ import { RULE_BENCHES } from "./rules.ts";
 
 const genDir = fileURLToPath(new URL("./.generated/", import.meta.url));
 const srcIndex = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+const srcCache = fileURLToPath(new URL("../src/cache.ts", import.meta.url));
 
 // External deps whose per-bundle contribution the table breaks out.
 const DEPS = ["rou3", "ocache", "ufo"];
@@ -48,6 +49,10 @@ const DEPS = ["rou3", "ocache", "ufo"];
 function variantsFor(spec) {
   const dir = `rules/${spec.name}/`;
   const normalized = normalizeRouteRules(spec.rules);
+  // Cache rules need the ocache-backed handler from `h3-rules/cache` — the
+  // core registry ships none (ocache is an optional peer, out of every other
+  // bundle). This is exactly what a consumer writes.
+  const usesCache = Object.values(normalized).some((rule) => rule.cache !== undefined);
   // preMerge: the shipping-mode pairing — compiled sets are static, so they can
   // always pre-merge (bench sets are chain-clean by construction). `matcher:
   // true` folds the `createMatcherFromFind(findRouteRules)` wrapper into the
@@ -65,8 +70,11 @@ function variantsFor(spec) {
         // runtime input.
         [`${dir}runtime.entry.mjs`]: [
           `import { createRouteRulesMatcher, normalizeRouteRules } from "h3-rules";`,
+          ...(usesCache ? [`import { cache } from "h3-rules/cache";`] : []),
           `const rules = ${JSON.stringify(spec.rules)};`,
-          `export const matcher = createRouteRulesMatcher(normalizeRouteRules(rules));`,
+          `export const matcher = createRouteRulesMatcher(normalizeRouteRules(rules)${
+            usesCache ? ", { handlers: { cache } }" : ""
+          });`,
           ``,
         ].join("\n"),
       },
@@ -94,7 +102,7 @@ async function measure(variant) {
     platform: "neutral",
     write: false,
     metafile: true,
-    alias: { "h3-rules": srcIndex },
+    alias: { "h3-rules": srcIndex, "h3-rules/cache": srcCache },
     logLevel: "silent",
   };
   // Measured bundle: what the table reports — minified, `h3` external. ocache

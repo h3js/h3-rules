@@ -1,6 +1,5 @@
 import { addRoute, createRouter, findAllRoutes } from "rou3";
 import type { RouterContext } from "rou3";
-import { createCacheRuleHandler } from "./rules/cache.ts";
 import { parseRouteKey } from "./internal/key.ts";
 import { mergeMatchedRouteRules } from "./merge.ts";
 import type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
@@ -124,19 +123,26 @@ export function createRouteRulesMatcher(
   rules: Record<string, RouteRules>,
   opts?: RouteRulesMatcherOptions,
 ): RouteRulesMatcher {
-  // Default rule handler registry. `cache` is created per matcher instance
-  // so its handler memoization is instance-scoped (see src/rules/cache.ts).
-  // Custom cache wiring (storage / defaults / full replacement) goes through
-  // `handlers: { cache: createCacheRuleHandler(opts) }` — when the caller
-  // supplies its own `cache` (even `undefined`, to make it data-only) the
-  // default instance handler is skipped rather than built and discarded.
+  // Default rule handler registry. There is no default `cache` handler — the
+  // caching implementation is not a core dependency. A rule set that uses
+  // `cache` (or the `swr` shortcut) without a registered handler would
+  // silently degrade to a data-only rule, so fail loudly at construction
+  // instead; an explicit `handlers: { cache: undefined }` opts into data-only.
   const handlers = {
     ...ruleHandlers,
-    ...(opts?.handlers && "cache" in opts.handlers
-      ? undefined
-      : { cache: createCacheRuleHandler() }),
     ...opts?.handlers,
   };
+  if (!("cache" in handlers)) {
+    for (const key in rules) {
+      if (rules[key]!.cache) {
+        throw new Error(
+          `[h3-rules] rules use \`cache\`/\`swr\` (\`${key}\`) but no \`cache\` handler is registered. ` +
+            `Install \`ocache\` and pass \`handlers: { cache }\` from "h3-rules/cache", provide your own ` +
+            `via \`createCacheRuleHandler\`, or pass \`handlers: { cache: undefined }\` to keep the rule data-only.`,
+        );
+      }
+    }
+  }
 
   const router = createRulesRouter(rules, handlers, opts?.baseURL, opts?.preMerge);
 

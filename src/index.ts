@@ -33,13 +33,16 @@ export { headers } from "./rules/headers.ts";
 export { redirect } from "./rules/redirect.ts";
 export { proxy } from "./rules/proxy.ts";
 export { basicAuth } from "./rules/basic-auth.ts";
-export { cache, createCacheRuleHandler } from "./rules/cache.ts";
-export type { CacheRuleOptions, DefineCachedHandler } from "./rules/cache.ts";
+// The ocache-backed `cache` handler lives in the `h3-rules/cache` subpath;
+// this factory builds one from an injected `defineCachedHandler`.
+export { createCacheRuleHandler } from "./rules/cache.ts";
+export type { CacheRuleHandlerOptions, DefineCachedHandler } from "./rules/cache.ts";
 
 // Types
 export type {
   RouteRuleConfig,
   RouteRules,
+  CacheRuleOptions,
   RedirectRuleOptions,
   ProxyRuleOptions,
   MatchedRouteRule,

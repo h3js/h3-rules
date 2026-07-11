@@ -9,11 +9,16 @@ import {
 import type { FindRouteRules } from "../src/match.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import { ruleHandlers } from "../src/rules/index.ts";
-import { FIXTURE, PROBES, snapshotResult } from "./_fixture.ts";
+import { FIXTURE, FIXTURE_HANDLERS, PROBES, snapshotResult } from "./_fixture.ts";
 
 describe("preMerge parity (runtime)", () => {
-  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
-  const preMerged = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), { preMerge: true });
+  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+    handlers: FIXTURE_HANDLERS,
+  });
+  const preMerged = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+    preMerge: true,
+    handlers: FIXTURE_HANDLERS,
+  });
 
   it.each(PROBES)("preMerged === plain for %s %s", (method, pathname) => {
     expect(snapshotResult(preMerged(method, pathname))).toEqual(
@@ -23,15 +28,17 @@ describe("preMerge parity (runtime)", () => {
 });
 
 describe("preMerge parity (compiled)", () => {
-  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
+  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+    handlers: FIXTURE_HANDLERS,
+  });
   const code = compileFindRouteRules(normalizeRouteRules(FIXTURE), { preMerge: true });
-  // Bind every registry handler as its `<ns>$<name>` local (superset of what
+  // Bind every fixture handler as its `<ns>$<name>` local (superset of what
   // the generated code references — unused params are harmless).
   // eslint-disable-next-line no-new-func
   const find = new Function(
-    ...Object.keys(ruleHandlers).map((name) => `__ruleHandlers__$${name}`),
+    ...Object.keys(FIXTURE_HANDLERS).map((name) => `__ruleHandlers__$${name}`),
     `return (${code});`,
-  )(...Object.values(ruleHandlers)) as FindRouteRules;
+  )(...Object.values(FIXTURE_HANDLERS)) as FindRouteRules;
   const compiled = createMatcherFromFind(find);
 
   it.each(PROBES)("compiled preMerged === plain for %s %s", (method, pathname) => {
@@ -42,9 +49,14 @@ describe("preMerge parity (compiled)", () => {
 });
 
 describe("preMerge parity (composed with memoize)", () => {
-  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE));
+  const plain = createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+    handlers: FIXTURE_HANDLERS,
+  });
   const combined = memoizeRouteRulesMatcher(
-    createRouteRulesMatcher(normalizeRouteRules(FIXTURE), { preMerge: true }),
+    createRouteRulesMatcher(normalizeRouteRules(FIXTURE), {
+      preMerge: true,
+      handlers: FIXTURE_HANDLERS,
+    }),
   );
 
   it.each(PROBES)("preMerged+memoized === plain for %s %s", (method, pathname) => {
@@ -65,7 +77,7 @@ describe("preMerge method matrix", () => {
         "GET /api/**": { headers: { "x-get": "1" } },
         "/api/deep/**": { swr: 60 },
       }),
-      { preMerge: true },
+      { preMerge: true, handlers: FIXTURE_HANDLERS },
     );
     const get = matcher("GET", "/api/deep/x");
     expect(get.routeRules.headers!.options).toEqual({ "x-get": "1" });

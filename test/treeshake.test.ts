@@ -28,6 +28,10 @@ const forceSideEffects: Plugin = {
       path: join(SRC, "index.ts"),
       sideEffects: true,
     }));
+    build.onResolve({ filter: /^h3-rules\/cache$/ }, () => ({
+      path: join(SRC, "cache.ts"),
+      sideEffects: true,
+    }));
     // In-repo imports are always relative and carry explicit `.ts` extensions.
     build.onResolve({ filter: /^\.\.?\// }, (args) =>
       args.importer.startsWith(SRC)
@@ -58,7 +62,7 @@ async function bundle(
     write: false,
     metafile: true,
     external: ["h3"],
-    alias: { "h3-rules": join(SRC, "index.ts") },
+    alias: { "h3-rules": join(SRC, "index.ts"), "h3-rules/cache": join(SRC, "cache.ts") },
     plugins: opts?.forceSideEffects ? [forceSideEffects] : [],
     logLevel: "silent",
   });
@@ -134,11 +138,22 @@ describe("tree-shaking (esbuild)", () => {
     expect(out.code).not.toContain(".next(");
   });
 
-  it("cache pulls ocache but nothing else", async () => {
-    const out = await bundle(`import * as rules from "h3-rules";\nexport const c = rules.cache;`);
+  it("the whole h3-rules surface carries no ocache reference", async () => {
+    // Retain every export — the core entry must not reference ocache at all;
+    // the ocache-backed cache handler lives solely in `h3-rules/cache`.
+    const out = await bundle(
+      `import * as rules from "h3-rules";\nexport const all = { ...rules };`,
+    );
+    expect(out.has("ocache")).toBe(false);
+    expect(out.has("src/match.ts")).toBe(true); // control: the surface is really retained
+  });
+
+  it("h3-rules/cache pulls ocache but not the matcher or ufo", async () => {
+    const out = await bundle(`import { cache } from "h3-rules/cache";\nexport const c = cache;`);
     expect(out.has("ocache")).toBe(true);
     expect(out.has("rou3")).toBe(false);
     expect(out.has("ufo")).toBe(false);
+    expect(out.has("src/match.ts")).toBe(false);
   });
 
   it("compiled codegen module shakes unused handler deps", async () => {
@@ -148,5 +163,17 @@ describe("tree-shaking (esbuild)", () => {
     expect(out.has("ocache")).toBe(false);
     expect(out.has("ufo")).toBe(false);
     expect(out.bytes).toBeLessThan(2048);
+  });
+
+  it("compiled codegen with a cache rule imports ocache via h3-rules/cache only", async () => {
+    // Positive control for the subpath sourcing: the generated
+    // `import { cache … } from "h3-rules/cache"` must resolve and carry ocache,
+    // while the rou3 router still stays out of the compiled bundle.
+    const mod = compileRouteRules({ "/api/**": { swr: 60 } });
+    expect(mod.imports).toContain('from "h3-rules/cache"');
+    const out = await bundle(`${mod}\nexport const find = findRouteRules;`);
+    expect(out.has("ocache")).toBe(true);
+    expect(out.has("src/cache.ts")).toBe(true);
+    expect(out.has("rou3")).toBe(false);
   });
 });

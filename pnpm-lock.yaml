@@ -9,9 +9,6 @@ importers:
 
   .:
     dependencies:
-      ocache:
-        specifier: ^0.2.0
-        version: 0.2.0
       rou3:
         specifier: ^0.9.1
         version: 0.9.1
@@ -46,6 +43,9 @@ importers:
       obuild:
         specifier: latest
         version: 0.4.37(@typescript/native-preview@7.0.0-dev.20260707.2)(chokidar@5.0.0)(dotenv@17.4.2)(giget@3.3.0)(jiti@2.7.0)(magicast@0.5.3)(typescript@6.0.3)
+      ocache:
+        specifier: ^0.2.0
+        version: 0.2.0
       oxfmt:
         specifier: latest
         version: 0.58.0

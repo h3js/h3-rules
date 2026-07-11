@@ -2,22 +2,57 @@ import { H3 } from "h3";
 import type { EventHandler } from "h3";
 import { describe, expect, it, vi } from "vitest";
 import { routeRules } from "../src/h3.ts";
-import type { RouteRuleConfig } from "../src/types.ts";
+import type { RouteRuleConfig, RuleHandler } from "../src/types.ts";
 import { createCacheRuleHandler } from "../src/rules/cache.ts";
-import type { CacheRuleOptions } from "../src/rules/cache.ts";
+import { cache, createCacheRuleHandler as createOcacheRuleHandler } from "../src/cache.ts";
+import type { OcacheRuleHandlerOptions } from "../src/cache.ts";
 
-const createApp = (config: Record<string, RouteRuleConfig>, cache?: CacheRuleOptions) => {
+const createApp = (config: Record<string, RouteRuleConfig>, cacheHandler: RuleHandler<"cache">) => {
   const app = new H3();
-  app.use(
-    routeRules(config, cache ? { handlers: { cache: createCacheRuleHandler(cache) } } : undefined),
-  );
+  app.use(routeRules(config, { handlers: { cache: cacheHandler } }));
   return app;
 };
 
-describe("cache rule", () => {
-  it("caches the matched route handler end-to-end (default ocache path)", async () => {
+// Core injection path: a matcher-scoped handler around a mock implementation.
+const createInjectedApp = (
+  config: Record<string, RouteRuleConfig>,
+  opts: Parameters<typeof createCacheRuleHandler>[0],
+) => createApp(config, createCacheRuleHandler(opts));
+
+describe("cache rule registration", () => {
+  it("matcher construction throws when rules use cache/swr with no handler", () => {
+    expect(() => routeRules({ "/cached/**": { swr: 60 } })).toThrow(
+      /no `cache` handler is registered/,
+    );
+    expect(() => routeRules({ "/cached/**": { cache: { maxAge: 60 } } })).toThrow(
+      /h3-rules\/cache/,
+    );
+  });
+
+  it("a rule set with only `cache: false` resets needs no handler", () => {
+    // Nothing to wrap — no middleware could ever be built from a bare reset.
+    expect(() => routeRules({ "/cached/**": { cache: false } })).not.toThrow();
+  });
+
+  it("explicit `handlers: { cache: undefined }` keeps the rule data-only", async () => {
+    const app = new H3();
+    app.use(routeRules({ "/cached/**": { swr: 60 } }, { handlers: { cache: undefined } }));
+    app.get("/cached/:id", (event) => ({
+      cache: event.context.routeRules?.cache?.options,
+    }));
+    const res = await app.fetch(new Request("http://test/cached/a"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ cache: { swr: true, maxAge: 60 } });
+  });
+});
+
+describe("cache rule (ocache-backed, h3-rules/cache)", () => {
+  it("caches the matched route handler end-to-end", async () => {
     let calls = 0;
-    const app = createApp({ "/cached-default/**": { swr: true, cache: { maxAge: 60 } } });
+    const app = createApp(
+      { "/cached-default/**": { swr: true, cache: { maxAge: 60 } } },
+      createOcacheRuleHandler(),
+    );
     app.get("/cached-default/:id", () => ({ calls: ++calls }));
 
     const first = await app.fetch(new Request("http://test/cached-default/a"));
@@ -27,98 +62,28 @@ describe("cache rule", () => {
     expect(calls).toBe(1);
   });
 
-  it("does not cache without a matched route (falls through to next)", async () => {
-    const app = createApp({ "/cached-nomatch/**": { cache: { maxAge: 60 } } });
-    // no route registered — middleware must call next() and 404
-    const res = await app.fetch(new Request("http://test/cached-nomatch/x"));
-    expect(res.status).toBe(404);
+  it("the shared `cache` export works as a registry handler", async () => {
+    let calls = 0;
+    const app = createApp({ "/cached-shared/**": { cache: { maxAge: 60 } } }, cache);
+    app.get("/cached-shared/:id", () => ({ calls: ++calls }));
+    await app.fetch(new Request("http://test/cached-shared/a"));
+    const res = await app.fetch(new Request("http://test/cached-shared/a"));
+    expect(await res.json()).toEqual({ calls: 1 });
   });
 
   it("cache: false on a nested pattern disables caching", async () => {
     let calls = 0;
-    const app = createApp({
-      "/cached-off/**": { cache: { maxAge: 60 } },
-      "/cached-off/dynamic": { cache: false },
-    });
+    const app = createApp(
+      {
+        "/cached-off/**": { cache: { maxAge: 60 } },
+        "/cached-off/dynamic": { cache: false },
+      },
+      createOcacheRuleHandler(),
+    );
     app.get("/cached-off/dynamic", () => ({ calls: ++calls }));
     await app.fetch(new Request("http://test/cached-off/dynamic"));
     const res = await app.fetch(new Request("http://test/cached-off/dynamic"));
     expect(await res.json()).toEqual({ calls: 2 }); // not cached
-  });
-
-  it("honors a full defineCachedHandler replacement", async () => {
-    const defineCachedHandler = vi.fn(
-      (handler: EventHandler, _opts: unknown): EventHandler =>
-        (event) => {
-          event.res.headers.set("x-custom-cache", "1");
-          return handler(event);
-        },
-    );
-    const app = createApp(
-      { "/cached-custom/**": { cache: { maxAge: 5 } } },
-      { defineCachedHandler },
-    );
-    app.get("/cached-custom/:id", () => "ok");
-
-    const res = await app.fetch(new Request("http://test/cached-custom/a"));
-    expect(res.headers.get("x-custom-cache")).toBe("1");
-    expect(defineCachedHandler).toHaveBeenCalledTimes(1);
-    expect(defineCachedHandler.mock.calls[0]![1]).toMatchObject({
-      group: "h3-rules/route-rules",
-      maxAge: 5,
-    });
-  });
-
-  it("merges `defaults` under rule options (rule options win)", async () => {
-    const defineCachedHandler = vi.fn(
-      (handler: EventHandler, _opts: unknown): EventHandler => handler,
-    );
-    const app = createApp(
-      { "/cached-defaults/**": { cache: { maxAge: 5 } } },
-      { defineCachedHandler, defaults: { maxAge: 99, staleMaxAge: 10 } },
-    );
-    app.get("/cached-defaults/:id", () => "ok");
-    await app.fetch(new Request("http://test/cached-defaults/a"));
-    expect(defineCachedHandler.mock.calls[0]![1]).toMatchObject({
-      maxAge: 5, // rule option wins over defaults
-      staleMaxAge: 10, // default preserved
-    });
-  });
-
-  it("wraps the same route exactly once across requests (memoization)", async () => {
-    const defineCachedHandler = vi.fn((handler: EventHandler): EventHandler => handler);
-    const app = createApp(
-      { "/cached-memo/**": { cache: { maxAge: 60 } } },
-      { defineCachedHandler },
-    );
-    app.get("/cached-memo/:id", () => "ok");
-
-    await app.fetch(new Request("http://test/cached-memo/a"));
-    await app.fetch(new Request("http://test/cached-memo/a"));
-    await app.fetch(new Request("http://test/cached-memo/b"));
-    // same rule route + same matched route → single wrap
-    expect(defineCachedHandler).toHaveBeenCalledTimes(1);
-  });
-
-  it("memoization is instance-scoped, not global", async () => {
-    const wrap1 = vi.fn((handler: EventHandler): EventHandler => handler);
-    const wrap2 = vi.fn((handler: EventHandler): EventHandler => handler);
-    const app1 = createApp(
-      { "/cached-inst/**": { cache: { maxAge: 60 } } },
-      { defineCachedHandler: wrap1 },
-    );
-    const app2 = createApp(
-      { "/cached-inst/**": { cache: { maxAge: 60 } } },
-      { defineCachedHandler: wrap2 },
-    );
-    app1.get("/cached-inst/:id", () => "one");
-    app2.get("/cached-inst/:id", () => "two");
-
-    await app1.fetch(new Request("http://test/cached-inst/a"));
-    await app2.fetch(new Request("http://test/cached-inst/a"));
-    // each matcher instance wraps independently (no shared/global map)
-    expect(wrap1).toHaveBeenCalledTimes(1);
-    expect(wrap2).toHaveBeenCalledTimes(1);
   });
 
   it("lets a `headers` cache-control override win over the cache handler (post-cache order)", async () => {
@@ -127,12 +92,15 @@ describe("cache rule", () => {
     // be clobbered. `headers` runs post-response (order -1), applying over the
     // cached response on both the miss and the subsequent hit.
     let calls = 0;
-    const app = createApp({
-      "/cached-headers/**": {
-        cache: { swr: true, maxAge: 60 },
-        headers: { "cache-control": "public, max-age=1", "x-extra": "1" },
+    const app = createApp(
+      {
+        "/cached-headers/**": {
+          cache: { swr: true, maxAge: 60 },
+          headers: { "cache-control": "public, max-age=1", "x-extra": "1" },
+        },
       },
-    });
+      createOcacheRuleHandler(),
+    );
     app.get("/cached-headers/:id", () => ({ calls: ++calls }));
 
     // miss: handler runs, response cached, but our headers still win
@@ -151,12 +119,15 @@ describe("cache rule", () => {
 
   it("never caches or serves cached bodies to unauthorized requests (basicAuth order -1)", async () => {
     let calls = 0;
-    const app = createApp({
-      "/cached-auth/**": {
-        cache: { maxAge: 60 },
-        basicAuth: { username: "u", password: "p", realm: "R" },
+    const app = createApp(
+      {
+        "/cached-auth/**": {
+          cache: { maxAge: 60 },
+          basicAuth: { username: "u", password: "p", realm: "R" },
+        },
       },
-    });
+      createOcacheRuleHandler(),
+    );
     app.get("/cached-auth/:id", () => ({ calls: ++calls }));
 
     // unauthorized before anything is cached: 401, handler never runs
@@ -181,9 +152,9 @@ describe("cache rule", () => {
     expect(await okAgain.json()).toEqual({ calls: 1 });
   });
 
-  // NOTE: keep this test last — the `storage` matcher option mutates ocache's
-  // process-global storage (`setStorage`), so it would leak into the
-  // default-ocache-path tests above if it ran first.
+  // NOTE: keep this test last in this describe — the `storage` option mutates
+  // ocache's process-global storage (`setStorage`), so it would leak into the
+  // default-storage tests above if it ran first.
   it("honors a consumer-provided storage", async () => {
     const store = new Map<string, unknown>();
     const storage = {
@@ -195,7 +166,7 @@ describe("cache rule", () => {
     let handlerCalls = 0;
     const app = createApp(
       { "/cached-storage/**": { cache: { maxAge: 60 } } },
-      { storage: storage as CacheRuleOptions["storage"] },
+      createOcacheRuleHandler({ storage: storage as OcacheRuleHandlerOptions["storage"] }),
     );
     app.get("/cached-storage/:id", () => (++handlerCalls, "stored"));
 
@@ -211,5 +182,92 @@ describe("cache rule", () => {
     expect(await second.text()).toBe("stored");
     expect(storage.get).toHaveBeenCalled();
     expect(handlerCalls).toBe(1);
+  });
+});
+
+describe("cache rule (core defineCachedHandler injection)", () => {
+  it("does not cache without a matched route (falls through to next)", async () => {
+    const app = createInjectedApp(
+      { "/cached-nomatch/**": { cache: { maxAge: 60 } } },
+      { defineCachedHandler: (handler) => handler },
+    );
+    // no route registered — middleware must call next() and 404
+    const res = await app.fetch(new Request("http://test/cached-nomatch/x"));
+    expect(res.status).toBe(404);
+  });
+
+  it("wraps the matched handler through the injected implementation", async () => {
+    const defineCachedHandler = vi.fn(
+      (handler: EventHandler, _opts: unknown): EventHandler =>
+        (event) => {
+          event.res.headers.set("x-custom-cache", "1");
+          return handler(event);
+        },
+    );
+    const app = createInjectedApp(
+      { "/cached-custom/**": { cache: { maxAge: 5 } } },
+      { defineCachedHandler },
+    );
+    app.get("/cached-custom/:id", () => "ok");
+
+    const res = await app.fetch(new Request("http://test/cached-custom/a"));
+    expect(res.headers.get("x-custom-cache")).toBe("1");
+    expect(defineCachedHandler).toHaveBeenCalledTimes(1);
+    expect(defineCachedHandler.mock.calls[0]![1]).toMatchObject({
+      group: "h3-rules/route-rules",
+      maxAge: 5,
+    });
+  });
+
+  it("merges `defaults` under rule options (rule options win)", async () => {
+    const defineCachedHandler = vi.fn(
+      (handler: EventHandler, _opts: unknown): EventHandler => handler,
+    );
+    const app = createInjectedApp(
+      { "/cached-defaults/**": { cache: { maxAge: 5 } } },
+      { defineCachedHandler, defaults: { maxAge: 99, staleMaxAge: 10 } },
+    );
+    app.get("/cached-defaults/:id", () => "ok");
+    await app.fetch(new Request("http://test/cached-defaults/a"));
+    expect(defineCachedHandler.mock.calls[0]![1]).toMatchObject({
+      maxAge: 5, // rule option wins over defaults
+      staleMaxAge: 10, // default preserved
+    });
+  });
+
+  it("wraps the same route exactly once across requests (memoization)", async () => {
+    const defineCachedHandler = vi.fn((handler: EventHandler): EventHandler => handler);
+    const app = createInjectedApp(
+      { "/cached-memo/**": { cache: { maxAge: 60 } } },
+      { defineCachedHandler },
+    );
+    app.get("/cached-memo/:id", () => "ok");
+
+    await app.fetch(new Request("http://test/cached-memo/a"));
+    await app.fetch(new Request("http://test/cached-memo/a"));
+    await app.fetch(new Request("http://test/cached-memo/b"));
+    // same rule route + same matched route → single wrap
+    expect(defineCachedHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoization is instance-scoped, not global", async () => {
+    const wrap1 = vi.fn((handler: EventHandler): EventHandler => handler);
+    const wrap2 = vi.fn((handler: EventHandler): EventHandler => handler);
+    const app1 = createInjectedApp(
+      { "/cached-inst/**": { cache: { maxAge: 60 } } },
+      { defineCachedHandler: wrap1 },
+    );
+    const app2 = createInjectedApp(
+      { "/cached-inst/**": { cache: { maxAge: 60 } } },
+      { defineCachedHandler: wrap2 },
+    );
+    app1.get("/cached-inst/:id", () => "one");
+    app2.get("/cached-inst/:id", () => "two");
+
+    await app1.fetch(new Request("http://test/cached-inst/a"));
+    await app2.fetch(new Request("http://test/cached-inst/a"));
+    // each matcher instance wraps independently (no shared/global map)
+    expect(wrap1).toHaveBeenCalledTimes(1);
+    expect(wrap2).toHaveBeenCalledTimes(1);
   });
 });

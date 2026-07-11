@@ -11,8 +11,9 @@ import type { RouteRuleConfig } from "../src/types.ts";
  * pre-merge) and JSON-serializable (the bundle bench compiles + embeds it).
  * `deps` names the external runtime packages the handler pulls in, so the
  * bundle table's per-dep columns can be read against expectations:
- * `cache`→ocache, `redirect`/`proxy`→ufo, and `headers`/`cors`/`basicAuth`
- * ship no extra deps (h3 is an external peer either way).
+ * `cache`→ocache (via the `h3-rules/cache` handler; ocache is an optional
+ * peer), `redirect`/`proxy`→ufo, and `headers`/`cors`/`basicAuth` ship no
+ * extra deps (h3 is an external peer either way).
  */
 export interface RuleBenchSpec {
   /** Built-in rule name (matches the handler + its named export). */

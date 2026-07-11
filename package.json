@@ -21,6 +21,7 @@
   "types": "./dist/index.d.mts",
   "exports": {
     ".": "./dist/index.mjs",
+    "./cache": "./dist/cache.mjs",
     "./compiler": "./dist/compiler.mjs"
   },
   "scripts": {
@@ -36,7 +37,6 @@
     "typecheck": "tsgo --noEmit --skipLibCheck"
   },
   "dependencies": {
-    "ocache": "^0.2.0",
     "rou3": "^0.9.1",
     "ufo": "^1.6.4"
   },
@@ -50,13 +50,20 @@
     "h3": "^2.0.1-rc.23",
     "mitata": "^1.0.34",
     "obuild": "latest",
+    "ocache": "^0.2.0",
     "oxfmt": "latest",
     "oxlint": "latest",
     "typescript": "latest",
     "vitest": "latest"
   },
   "peerDependencies": {
-    "h3": "^2.0.1-rc.23"
+    "h3": "^2.0.1-rc.23",
+    "ocache": ">=0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "ocache": {
+      "optional": true
+    }
   },
   "packageManager": "pnpm@11.10.0"
 }

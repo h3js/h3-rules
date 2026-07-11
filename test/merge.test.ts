@@ -4,9 +4,12 @@ import { mergeMatchedRouteRules } from "../src/merge.ts";
 import type { RouteRuleLayer } from "../src/merge.ts";
 import { normalizeRouteRules } from "../src/normalize.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
+import { FIXTURE_HANDLERS } from "./_fixture.ts";
 
+// The cascades below include cache/swr rules; register the fixture handler set
+// (the core registry ships no `cache` handler).
 const matcher = (config: Record<string, RouteRuleConfig>) =>
-  createRouteRulesMatcher(normalizeRouteRules(config));
+  createRouteRulesMatcher(normalizeRouteRules(config), { handlers: FIXTURE_HANDLERS });
 
 describe("merge algorithm", () => {
   it("more specific patterns win (specificity ordering)", () => {

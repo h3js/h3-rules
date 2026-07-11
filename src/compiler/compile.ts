@@ -97,9 +97,10 @@ export function compileFindRouteRules(
  * **exactly** the handlers the rule set references (empty string if none), so
  * unused handlers — and their dependencies (e.g. ocache for `cache`) — stay
  * tree-shakeable. Each handler's source comes from its `runtimeRules` entry
- * (`h3-rules` for the built-ins via {@link DEFAULT_RUNTIME_RULES}; consumers
- * like Nitro point individual rules at their own module to add/override
- * handlers), and each source's module must have a named export per handler.
+ * (`h3-rules` for the built-ins via {@link DEFAULT_RUNTIME_RULES}, except
+ * `cache` from `h3-rules/cache`; consumers like Nitro point individual rules
+ * at their own module to add/override handlers), and each source's module must
+ * have a named export per handler.
  * Input is normalized internally (see {@link RouteRulesInput}), identically to
  * {@link compileFindRouteRules}, so the import reflects the handlers the
  * normalized rules actually reference (e.g. an `swr` shortcut counts as

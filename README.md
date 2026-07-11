@@ -18,19 +18,23 @@ Add the `routeRules` middleware to your H3 app:
 ```ts
 import { H3, serve } from "h3";
 import { routeRules } from "h3-rules";
+import { cache } from "h3-rules/cache"; // only needed for cache/swr rules (requires ocache)
 
 const app = new H3();
 
 app.use(
-  routeRules({
-    "/blog/**": { swr: 60 },
-    "/old/**": { redirect: { to: "/new/**", status: 301 } },
-    "/api/proxy/**": { proxy: "https://example.com/**" },
-    "/assets/**": { headers: { "cache-control": "s-maxage=31536000" } },
-    "/admin/**": { basicAuth: { username: "admin", password: "secret" } },
-    "/api/**": { cors: true },
-    "GET /api/cached/**": { swr: 60 }, // method-scoped
-  }),
+  routeRules(
+    {
+      "/blog/**": { swr: 60 },
+      "/old/**": { redirect: { to: "/new/**", status: 301 } },
+      "/api/proxy/**": { proxy: "https://example.com/**" },
+      "/assets/**": { headers: { "cache-control": "s-maxage=31536000" } },
+      "/admin/**": { basicAuth: { username: "admin", password: "secret" } },
+      "/api/**": { cors: true },
+      "GET /api/cached/**": { swr: 60 }, // method-scoped
+    },
+    { handlers: { cache } },
+  ),
 );
 
 serve(app);
@@ -45,7 +49,7 @@ Patterns are matched with [rou3](https://github.com/h3js/rou3) against `event.ur
 | `headers`   | Set response headers. Applied to the final response (after `cache`/`redirect`/`proxy`), so a `cache-control` here overrides ocache's computed value. |
 | `redirect`  | Redirect (string defaults to status `307`; `/**` targets append the matched tail).                                                                   |
 | `proxy`     | Proxy the request to another origin or in-app path (same `/**` tail behavior).                                                                       |
-| `cache`     | Wrap the matched route handler with a cached handler ([ocache](https://github.com/unjs/ocache)).                                                     |
+| `cache`     | Wrap the matched route handler with a cached handler. Needs a registered handler — see [Caching](#caching-h3-rulescache).                            |
 | `basicAuth` | HTTP Basic Authentication (runs before redirect/proxy/cache).                                                                                        |
 | `cors`      | Shortcut for permissive CORS headers (your `headers` win).                                                                                           |
 | `swr`       | Shortcut for `cache: { swr: true, maxAge?: number }` (`swr: 0` is valid; `swr: false` resets an inherited `cache`).                                  |
@@ -63,6 +67,42 @@ Keys may carry an optional HTTP method prefix (`"GET /api/**"`). A key without a
 
 Unknown keys (e.g. `prerender`, `isr`, or your own) are **data-only**: they flow through matching and merging and can be read from `event.context.routeRules`, but have no runtime handler.
 
+### Caching (`h3-rules/cache`)
+
+The core package ships **no caching implementation** — `cache` (and the `swr` shortcut) need a registered `cache` rule handler, and matcher construction throws if a rule set uses them without one (pass `handlers: { cache: undefined }` to deliberately keep them data-only). The ready-made handler is backed by [ocache](https://github.com/unjs/ocache) and lives in the `h3-rules/cache` subpath, so ocache (an **optional** peer dependency — install it alongside `h3-rules`) stays out of every bundle that doesn't cache:
+
+```ts
+import { routeRules } from "h3-rules";
+import { cache, createCacheRuleHandler } from "h3-rules/cache";
+
+// default: ocache with in-memory storage, wired with h3's response glue
+app.use(routeRules({ "/blog/**": { swr: 60 } }, { handlers: { cache } }));
+
+// custom storage / defaults (one handler instance per matcher):
+app.use(
+  routeRules(rules, {
+    handlers: {
+      cache: createCacheRuleHandler({
+        storage: myStorage, // ocache storage (minimal get/set) — note: process-global (`setStorage`)
+        defaults: { staleMaxAge: 60 }, // ocache defaults incl. hooks (rule options win)
+      }),
+    },
+  }),
+);
+```
+
+To plug in your own caching (no ocache at all), build a handler from the **core** factory — `defineCachedHandler` receives the matched route handler plus the merged rule options (`group`/`name` pre-filled) and returns the cached wrapper. This is the integration point for frameworks (e.g. Nitro's unstorage / `useStorage()` wiring):
+
+```ts
+import { createCacheRuleHandler } from "h3-rules";
+
+const cache = createCacheRuleHandler({
+  defineCachedHandler: (handler, opts) => myCachedHandler(handler, opts),
+});
+```
+
+The declarative rule options (`RouteRuleConfig["cache"]`) are the ocache-compatible `CacheRuleOptions` schema owned by `h3-rules`; implementation hooks (`getKey`, `shouldCache`, `getMaxAge`, …) are not rule data — pass them via the handler factory's `defaults`.
+
 ### Utils
 
 ```ts
@@ -71,8 +111,8 @@ import {
   normalizeRouteRules,
   mergeMatchedRouteRules,
   ruleHandlers,
-  createCacheRuleHandler,
 } from "h3-rules";
+import { cache } from "h3-rules/cache";
 
 const matcher = createRouteRulesMatcher(normalizeRouteRules(config), {
   baseURL: "/base", // prefix all patterns
@@ -86,13 +126,8 @@ const matcher = createRouteRulesMatcher(normalizeRouteRules(config), {
         /* ... */
       },
     },
-    // custom cache wiring goes through the handler registry:
-    // cache: createCacheRuleHandler({
-    //   storage: myStorage, // ocache storage (minimal get/set)
-    //   defaults: { staleMaxAge: 60 }, // ocache defaults (rule options win)
-    //   // or replace the wiring entirely:
-    //   defineCachedHandler: (handler, opts) => ...,
-    // }),
+    // cache/swr rules need a registered cache handler (none by default):
+    cache,
   },
 });
 
@@ -152,9 +187,9 @@ compileRouteRules(config, { matcher: { name: "routeMatcher", memoize: true } });
 
 `matcher: true` names the export `matcher`; pass a string to rename it, or `{ name?, memoize? }` to also wrap in `memoizeRouteRulesMatcher` (`memoize: { max }` tunes the cap). `memoizeRouteRulesMatcher` is imported **only** when `memoize` is set, so an un-memoized matcher export still tree-shakes it away. The infra import counts toward `mod.imports`.
 
-The generated module imports **only the rule handlers the rule set uses** — each built-in is a named export of `h3-rules` (`headers`, `redirect`, `proxy`, `cache`, `basicAuth`), so unused handlers and their dependencies (rou3's matcher always, ocache/ufo when `cache`/`redirect`/`proxy` are unused) tree-shake out of the bundle.
+The generated module imports **only the rule handlers the rule set uses** — each built-in is a named export of `h3-rules` (`headers`, `redirect`, `proxy`, `basicAuth`), except `cache`, which imports from `h3-rules/cache` (the ocache-backed handler; requires the optional `ocache` peer only when a cache rule exists). Unused handlers and their dependencies (rou3's matcher always, ocache/ufo when `cache`/`redirect`/`proxy` are unused) tree-shake out of the bundle.
 
-Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the module must export a member named exactly as the rule key, e.g. `cache: "#nitro/cache"` imports `cache`) or `{ source, export }` when the export is named something else. It is merged **over** the built-in preset (`DEFAULT_RUNTIME_RULES`, every built-in from `h3-rules`), so you only list what you add or change — the built-ins stay registered. Handlers sharing a source collapse into one import statement:
+Where each handler is imported from is controlled by `runtimeRules` — a record keyed by rule name whose value is either a module id (the module must export a member named exactly as the rule key, e.g. `cache: "#nitro/cache"` imports `cache`) or `{ source, export }` when the export is named something else. It is merged **over** the built-in preset (`DEFAULT_RUNTIME_RULES`: every built-in from `h3-rules`, `cache` from `h3-rules/cache`), so you only list what you add or change — the built-ins stay registered. Handlers sharing a source collapse into one import statement:
 
 ```ts
 import { compileRouteRules } from "h3-rules/compiler";
@@ -170,7 +205,7 @@ compileRouteRules(config, {
 // (redirect, headers, … still import from "h3-rules" when used)
 ```
 
-A custom `cache` handler can be built with `createCacheRuleHandler(opts)`.
+A custom `cache` handler can be built with `createCacheRuleHandler` — the ocache-wired factory from `h3-rules/cache` (`storage`/`defaults`), or the core injection factory from `h3-rules` (`defineCachedHandler`); see [Caching](#caching-h3-rulescache).
 
 ### Extending rule types
 
