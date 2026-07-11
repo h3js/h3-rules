@@ -117,29 +117,38 @@ describe("normalizeRouteRules - proxy", () => {
 });
 
 describe("normalizeRouteRules - cors", () => {
-  it("cors: true merges permissive headers under user headers", () => {
+  it("cors: true normalizes to an empty options object (h3 fills defaults)", () => {
     const rules = normalizeRouteRules({ "/api/**": { cors: true } });
-    expect(rules["/api/**"]!.headers).toEqual({
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "*",
-      "access-control-allow-headers": "*",
-      "access-control-max-age": "0",
-    });
+    expect(rules["/api/**"]!.cors).toEqual({});
+    // No longer baked into static headers — `handleCors` owns the headers.
+    expect(rules["/api/**"]!).not.toHaveProperty("headers");
   });
 
-  it("user headers override cors defaults", () => {
+  it("cors object passes through as h3 CorsOptions", () => {
     const rules = normalizeRouteRules({
-      "/api/**": { cors: true, headers: { "access-control-allow-origin": "https://example.com" } },
+      "/api/**": { cors: { origin: ["https://example.com"], credentials: true, maxAge: "600" } },
     });
-    expect(rules["/api/**"]!.headers).toMatchObject({
-      "access-control-allow-origin": "https://example.com",
-      "access-control-allow-methods": "*",
+    expect(rules["/api/**"]!.cors).toEqual({
+      origin: ["https://example.com"],
+      credentials: true,
+      maxAge: "600",
     });
   });
 
-  it("cors shortcut key does not survive normalization", () => {
+  it("cors: false is a reset marker (disables an inherited cors rule)", () => {
+    const rules = normalizeRouteRules({ "/api/**": { cors: false } });
+    expect(rules["/api/**"]!.cors).toBe(false);
+  });
+
+  it("does not mutate the user's cors options object", () => {
+    const config = { origin: ["https://example.com"] };
+    const rules = normalizeRouteRules({ "/api/**": { cors: config } });
+    expect(rules["/api/**"]!.cors).not.toBe(config);
+    expect(rules["/api/**"]!.cors).toEqual(config);
+  });
+
+  it("swr shortcut key does not survive normalization", () => {
     const rules = normalizeRouteRules({ "/api/**": { cors: true } });
-    expect(rules["/api/**"]!).not.toHaveProperty("cors");
     expect(rules["/api/**"]!).not.toHaveProperty("swr");
   });
 });

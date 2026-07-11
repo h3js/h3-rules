@@ -5,7 +5,8 @@ import type { RouteRuleConfig, RouteRules } from "./types.ts";
 /**
  * Normalize user route-rule config into runtime rules.
  *
- * Expands shortcuts (`swr`, `cors`), resolves `redirect`/`proxy` string forms,
+ * Expands the `swr` shortcut, normalizes `cors` (`true` → permissive options
+ * object) and `redirect`/`proxy` string forms,
  * and attaches a first-class `base` field to `/**` redirect/proxy rules. Keys
  * may carry a `"METHOD /path"` prefix (see {@link parseRouteKey}); the returned
  * map is re-keyed in canonical `"METHOD /path"` / `"/path"` form with the path
@@ -51,15 +52,11 @@ export function normalizeRouteRules(
       }
     }
 
-    // CORS
-    if (routeConfig.cors) {
-      routeRules.headers = {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "*",
-        "access-control-allow-headers": "*",
-        "access-control-max-age": "0",
-        ...routeRules.headers,
-      };
+    // CORS (h3 `handleCors` options). `true` → permissive defaults (empty
+    // options object; h3 fills origin/methods/allowHeaders `*`). `false` is a
+    // reset marker (handled below with the other resets).
+    if (routeConfig.cors !== undefined && routeConfig.cors !== false) {
+      routeRules.cors = routeConfig.cors === true ? {} : { ...routeConfig.cors };
     }
 
     // Cache: swr
@@ -93,12 +90,15 @@ export function normalizeRouteRules(
     if (routeConfig.proxy === false) {
       routeRules.proxy = false;
     }
+    if (routeConfig.cors === false) {
+      routeRules.cors = false;
+    }
 
     // Drop the keys we consumed / reset to undefined so the serialized rule set
     // is clean (undefined-valued own props otherwise survive object spread).
     if (routeRules.redirect === undefined) delete routeRules.redirect;
     if (routeRules.proxy === undefined) delete routeRules.proxy;
-    delete routeRules.cors;
+    if (routeRules.cors === undefined) delete routeRules.cors;
     delete routeRules.swr;
 
     // Distinct config keys can collide once canonicalized (`"get /x"` vs

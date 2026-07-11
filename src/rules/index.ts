@@ -1,5 +1,6 @@
 import type { RuleHandlers } from "../types.ts";
 import { basicAuth } from "./basic-auth.ts";
+import { cors } from "./cors.ts";
 import { headers } from "./headers.ts";
 import { redirect } from "./redirect.ts";
 
@@ -25,4 +26,5 @@ export const ruleHandlers: RuleHandlers = {
   headers,
   redirect,
   basicAuth,
+  cors,
 };

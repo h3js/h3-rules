@@ -11,6 +11,7 @@ export const RUNTIME_RULE_NAMES: readonly string[] = Object.freeze([
   "proxy",
   "cache",
   "basicAuth",
+  "cors",
 ]);
 
 /**

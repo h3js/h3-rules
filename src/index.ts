@@ -32,6 +32,7 @@ export { ruleHandlers } from "./rules/index.ts";
 export { headers } from "./rules/headers.ts";
 export { redirect } from "./rules/redirect.ts";
 export { basicAuth } from "./rules/basic-auth.ts";
+export { cors } from "./rules/cors.ts";
 // The `proxy` handler lives in the `h3-rules/proxy` subpath (opt-in, so h3's
 // `proxyRequest` stays out of bundles that don't proxy). The ocache-backed
 // `cache` handler lives in the `h3-rules/cache` subpath; this factory builds one

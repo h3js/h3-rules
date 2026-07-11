@@ -32,10 +32,71 @@ describe("headers rule", () => {
     });
     app.get("/rules/cors", () => "ok");
     const res = await app.fetch(new Request("http://test/rules/cors"));
+    // `handleCors` sets the permissive origin on a normal request; the user
+    // `headers` rule (order -1, `.set`) still owns `access-control-allow-methods`.
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
     expect(res.headers.get("access-control-allow-methods")).toBe("GET");
-    expect(res.headers.get("access-control-allow-headers")).toBe("*");
-    expect(res.headers.get("access-control-max-age")).toBe("0");
+  });
+});
+
+describe("cors rule", () => {
+  it("answers a preflight request with 204 + policy headers", async () => {
+    const app = createApp({ "/api/**": { cors: true } });
+    app.get("/api/x", () => "ok");
+    const res = await app.fetch(
+      new Request("http://test/api/x", {
+        method: "OPTIONS",
+        headers: { origin: "https://example.com", "access-control-request-method": "GET" },
+      }),
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.headers.get("access-control-allow-methods")).toBe("*");
+  });
+
+  it("reflects an allowlisted origin and honors credentials", async () => {
+    const app = createApp({
+      "/api/**": { cors: { origin: ["https://example.com"], credentials: true } },
+    });
+    app.get("/api/x", () => "ok");
+    const allowed = await app.fetch(
+      new Request("http://test/api/x", { headers: { origin: "https://example.com" } }),
+    );
+    expect(allowed.headers.get("access-control-allow-origin")).toBe("https://example.com");
+    expect(allowed.headers.get("access-control-allow-credentials")).toBe("true");
+    const denied = await app.fetch(
+      new Request("http://test/api/x", { headers: { origin: "https://evil.com" } }),
+    );
+    expect(denied.headers.get("access-control-allow-origin")).toBe(null);
+  });
+
+  it("preflight short-circuits before basicAuth (browsers send no credentials)", async () => {
+    const app = createApp({
+      "/api/**": { cors: true, basicAuth: { username: "u", password: "p" } },
+    });
+    app.get("/api/x", () => "ok");
+    // Preflight OPTIONS: answered by cors (204), never hitting the auth gate.
+    const preflight = await app.fetch(
+      new Request("http://test/api/x", {
+        method: "OPTIONS",
+        headers: { origin: "https://example.com", "access-control-request-method": "GET" },
+      }),
+    );
+    expect(preflight.status).toBe(204);
+    // A real (non-preflight) request is still gated by basicAuth.
+    const guarded = await app.fetch(
+      new Request("http://test/api/x", { headers: { origin: "https://example.com" } }),
+    );
+    expect(guarded.status).toBe(401);
+  });
+
+  it("cors: false resets an inherited cors rule", async () => {
+    const app = createApp({ "/api/**": { cors: true }, "/api/no-cors": { cors: false } });
+    app.get("/api/no-cors", () => "ok");
+    const res = await app.fetch(
+      new Request("http://test/api/no-cors", { headers: { origin: "https://example.com" } }),
+    );
+    expect(res.headers.get("access-control-allow-origin")).toBe(null);
   });
 
   it("exposes merged rules on event.context.routeRules", async () => {
@@ -106,6 +167,36 @@ describe("redirect rule", () => {
     const res = await app.fetch(new Request("http://test/rules/redirect/wildcard/a%2fb"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("https://h3.dev/a%2fb");
+  });
+});
+
+describe("proxy rule registration", () => {
+  it("matcher construction throws when rules use proxy with no handler", () => {
+    // `proxy` is an opt-in subpath handler — a proxy rule with no registered
+    // handler would silently degrade to a data-only rule (never forwarded), so
+    // construction fails loudly instead.
+    expect(() => routeRules({ "/api/proxy/**": { proxy: "/api/echo" } })).toThrow(
+      /no `proxy` handler is registered/,
+    );
+    expect(() => routeRules({ "/api/proxy/**": { proxy: "/api/echo" } })).toThrow(
+      /h3-rules\/proxy/,
+    );
+  });
+
+  it("a rule set with only `proxy: false` resets needs no handler", () => {
+    expect(() => routeRules({ "/api/proxy/**": { proxy: false } })).not.toThrow();
+  });
+
+  it("explicit `handlers: { proxy: undefined }` keeps the rule data-only", async () => {
+    const app = new H3();
+    app.use(
+      routeRules({ "/api/proxy/**": { proxy: "/api/echo" } }, { handlers: { proxy: undefined } }),
+    );
+    app.get("/api/proxy/**", (event) => ({ rules: Object.keys(event.context.routeRules || {}) }));
+    const res = await app.fetch(new Request("http://test/api/proxy/hello"));
+    expect(res.status).toBe(200);
+    // The rule is present as data but not acted on (no forwarding).
+    expect(await res.json()).toEqual({ rules: ["proxy"] });
   });
 });
 

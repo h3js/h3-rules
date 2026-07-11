@@ -139,7 +139,7 @@ describe("memoizeRouteRulesMatcher", () => {
     for (let i = 0; i < 3; i++) {
       const res = await app.fetch(new Request("http://test/api/users/42"));
       expect(await res.json()).toEqual({ params: { section: "users", id: "42" } });
-      // the `cors` rule applies post-response (headers rule, order -1)
+      // the `cors` rule (h3 handleCors) sets the permissive origin
       expect(res.headers.get("access-control-allow-origin")).toBe("*");
     }
     // encoded separator still hits the canonical auth gate when memoized

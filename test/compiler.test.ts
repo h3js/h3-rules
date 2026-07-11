@@ -512,18 +512,19 @@ describe("input normalization", () => {
     "/old/**": { redirect: "/new/**" },
   };
 
-  it("expands authored shortcuts (swr/cors/string redirect) before compiling", () => {
+  it("expands authored shortcuts (swr/string redirect) and normalizes cors before compiling", () => {
     // Pre-auto-normalization, raw config here silently mis-compiled: `swr`
     // is not a runtime rule name, so no cache handler was imported and the
-    // rule became data-only.
+    // rule became data-only. `cors` is now a first-class rule (its handler is
+    // imported), not a shortcut expanded into static `headers`.
     expect(compileHandlersImport(config)).toBe(
-      'import { headers as __ruleHandlers__$headers, redirect as __ruleHandlers__$redirect } from "h3-rules";\n' +
+      'import { cors as __ruleHandlers__$cors, redirect as __ruleHandlers__$redirect } from "h3-rules";\n' +
         'import { cache as __ruleHandlers__$cache } from "h3-rules/cache";',
     );
     const code = compileFindRouteRules(config);
     expect(code).toContain('name:"cache"');
+    expect(code).toContain('name:"cors"');
     expect(code).not.toContain('name:"swr"');
-    expect(code).not.toContain('name:"cors"');
     const matcher = createMatcherFromFind(evaluateFind(code));
     expect(matcher("GET", "/old/x").routeRules.redirect!.options).toEqual({
       to: "/new/**",

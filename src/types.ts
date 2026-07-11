@@ -1,4 +1,4 @@
-import type { BasicAuthOptions, Middleware, ProxyOptions } from "h3";
+import type { BasicAuthOptions, CorsOptions, Middleware, ProxyOptions } from "h3";
 
 /** Valid HTTP status code (100–599). Kept loose (`number`) for portability. */
 export type HTTPStatus = number;
@@ -101,14 +101,17 @@ export interface RouteRuleConfig {
    */
   basicAuth?: Pick<BasicAuthOptions, "password" | "username" | "realm"> | false;
 
-  // Shortcuts
-
   /**
-   * Shortcut to add permissive CORS headers (`access-control-allow-origin: *`,
-   * `access-control-allow-methods: *`, `access-control-allow-headers: *`,
-   * `access-control-max-age: 0`). Individual {@link headers} override these.
+   * Handle CORS for matching routes via h3's `handleCors`. `true` applies
+   * permissive defaults (origin/methods/allowHeaders `*`); an object is passed
+   * through as h3 {@link CorsOptions} (origin allowlist, `credentials`,
+   * `maxAge`, …). A CORS preflight is answered directly (204) before any other
+   * rule — including `basicAuth`. Set to `false` to disable CORS inherited from
+   * a less-specific pattern.
    */
-  cors?: boolean;
+  cors?: CorsOptions | boolean;
+
+  // Shortcuts
 
   /**
    * Shortcut for `cache: { swr: true, maxAge?: number }`.
@@ -134,6 +137,7 @@ export interface RouteRules {
   proxy?: ProxyRuleOptions | false;
   cache?: CacheRuleOptions | false;
   basicAuth?: Pick<BasicAuthOptions, "password" | "username" | "realm"> | false;
+  cors?: CorsOptions | false;
   [key: string]: unknown;
 }
 
