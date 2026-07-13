@@ -417,4 +417,24 @@ describe("mergeMatchedRouteRules (pure)", () => {
     expect(mergeMatchedRouteRules(undefined)).toEqual({});
     expect(mergeMatchedRouteRules([], [])).toEqual({});
   });
+
+  it("a `__proto__` / `constructor` rule name cannot pollute Object.prototype", () => {
+    // Rule names are attacker-influenceable config keys. The merge accumulator is
+    // a null-prototype object, so `routeRules["__proto__"]` is a plain own key
+    // rather than the inherited `Object.prototype` getter — otherwise the update
+    // branch would assign `currentRule.options/route/method` onto Object.prototype
+    // (a process-wide DoS). This path bypasses `normalizeRouteRules` (compiled /
+    // hand-built matchers), so the runtime merge must be self-defending.
+    for (const name of ["__proto__", "constructor"]) {
+      const layers = [
+        { data: [{ name, route: "/x", options: { polluted: true } }], params: undefined },
+      ];
+      const merged = mergeMatchedRouteRules(layers as never);
+      expect(Object.hasOwn(Object.prototype, "options")).toBe(false);
+      expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+      expect(({} as Record<string, unknown>).options).toBeUndefined();
+      // the rule is still carried as an own key of the (null-proto) result
+      expect(Object.keys(merged)).toContain(name);
+    }
+  });
 });

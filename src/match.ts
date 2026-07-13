@@ -88,7 +88,12 @@ export function createRulesRouter(
         route: path,
         method: method || undefined,
         options: base ? withScopeBase(name, options, base) : options,
-        handler: handlers[name] as MatchedRouteRule["handler"],
+        // `handlers[name]` for a rule named `__proto__`/`constructor` would read
+        // an inherited `Object.prototype` member (a truthy non-handler) — gate on
+        // own membership so such names stay handler-less data rules.
+        handler: (Object.hasOwn(handlers, name)
+          ? handlers[name]
+          : undefined) as MatchedRouteRule["handler"],
       });
     }
     let methods = byPath.get(path);

@@ -114,7 +114,19 @@ export function normalizeRouteRules(
     // spread used to combine overlapping layers would splice two arrays into an
     // index-keyed plain object (losing array-ness), so reject it at config time
     // instead of silently corrupting. Wrap the array in an object if needed.
+    // Rule names become object property keys throughout matching/merging;
+    // reserved prototype keys (`__proto__` / `constructor` / `prototype`) are
+    // never legitimate rule names and would otherwise resolve to inherited
+    // prototype members at match time — reject them here (the runtime merge is
+    // also hardened with null-prototype accumulators, but fail loudly at config
+    // time). `for..in` also surfaces an own `__proto__` key (e.g. from a
+    // JSON-sourced config), which a plain-object key check would miss.
     for (const name in routeRules) {
+      if (name === "__proto__" || name === "constructor" || name === "prototype") {
+        throw new Error(
+          `[h3-rules] \`${name}\` is a reserved name and cannot be used as a rule for \`${canonicalKey}\``,
+        );
+      }
       if (Array.isArray(routeRules[name])) {
         throw new Error(
           `[h3-rules] \`${name}\` rule for \`${canonicalKey}\` is an array — rule options cannot be top-level arrays (ambiguous merge semantics); wrap it in an object`,

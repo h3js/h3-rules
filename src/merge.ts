@@ -70,7 +70,7 @@ function resolveLayers(layers: RouteRuleLayer[] | undefined): MatchedRouteRules 
   if (lastData && !Array.isArray(lastData)) {
     return resolvePreMergedLayers(layers!, lastData);
   }
-  const routeRules: MatchedRouteRules = {};
+  const routeRules = emptyRouteRules();
   for (const layer of layers || []) {
     for (const entry of layer.data as RouteRuleEntry[]) {
       mergeRouteRule(routeRules, entry, layer.params);
@@ -84,6 +84,18 @@ function resolveLayers(layers: RouteRuleLayer[] | undefined): MatchedRouteRules 
 // overriding it. Shared with the build-time chain merge (premerge).
 export function isMergeableObject(value: unknown): value is object {
   return value !== null && typeof value === "object";
+}
+
+// The accumulator every path resolves into is keyed by **rule name**, which is
+// attacker-influenceable config (rule names become property keys). A null
+// prototype makes a name like `__proto__`/`constructor`/`prototype` a plain own
+// key: without it `routeRules["__proto__"]` reads the inherited `Object.prototype`
+// getter (truthy), so `mergeRouteRule` would take the update branch and assign
+// `currentRule.options`/`route`/`method` **directly onto `Object.prototype`** —
+// a process-wide prototype-pollution DoS. `Object.values`/`entries`/`keys`
+// (used downstream) all work on null-proto objects.
+function emptyRouteRules(): MatchedRouteRules {
+  return Object.create(null) as MatchedRouteRules;
 }
 
 // THE core option-merge rule, shared by every merge site (runtime layer merge
@@ -112,7 +124,7 @@ function resolvePreMergedLayers(
   layers: RouteRuleLayer[],
   lastData: PreMergedRouteRules,
 ): MatchedRouteRules {
-  const routeRules: MatchedRouteRules = {};
+  const routeRules = emptyRouteRules();
   for (const entry of lastData.rules) {
     const paramRoutes = entry.paramRoutes;
     let params: Record<string, string> | undefined;

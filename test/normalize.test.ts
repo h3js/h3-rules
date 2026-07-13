@@ -342,3 +342,18 @@ describe("normalizeRouteRules - array options rejected", () => {
     expect(rules["/a/**"]!.custom).toEqual({ list: [1, 2, 3] });
   });
 });
+
+describe("normalizeRouteRules - reserved rule names rejected", () => {
+  // Rule names become object property keys throughout matching/merging. A name
+  // like `__proto__`/`constructor`/`prototype` would otherwise resolve to an
+  // inherited prototype member and let a merge write onto `Object.prototype`
+  // (process-wide prototype pollution). Reject them at config time.
+  for (const name of ["__proto__", "constructor", "prototype"]) {
+    it(`throws on a \`${name}\` rule name`, () => {
+      // JSON.parse so `__proto__` is a real own key, not prototype syntax.
+      const config = JSON.parse(`{"/x": {"${name}": {"polluted": true}}}`);
+      expect(() => normalizeRouteRules(config)).toThrow(/is a reserved name/);
+      expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    });
+  }
+});
