@@ -498,6 +498,36 @@ describe("compile-time validation", () => {
     );
   });
 
+  it("throws on an own `__proto__` option key (object-literal proto-setter divergence)", () => {
+    // `JSON.stringify` emits an own enumerable `__proto__` as a `"__proto__"`
+    // member, but the compiler embeds that JSON as a JS object literal where
+    // `"__proto__"` is the prototype-setter production — so the compiled options
+    // object would drop the key and adopt a new prototype, diverging from the
+    // runtime matcher (which carries it as plain data). Refuse it rather than
+    // silently diverge. This is the sole key where JSON and JS-literal semantics
+    // disagree.
+    const withProto = (value: unknown): RouteRuleConfig => {
+      const opts: Record<string, unknown> = { a: "1" };
+      Object.defineProperty(opts, "__proto__", {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      return { custom: opts } as RouteRuleConfig;
+    };
+    expect(() => compileFindRouteRules({ "/p": withProto("polluted") })).toThrow(/__proto__/);
+    expect(() => compileFindRouteRules({ "/p": withProto({ injected: true }) })).toThrow(
+      /__proto__/,
+    );
+    // Nested inside a plain object, too.
+    const nested: Record<string, unknown> = {};
+    Object.defineProperty(nested, "__proto__", { value: 1, enumerable: true, configurable: true });
+    expect(() =>
+      compileFindRouteRules({ "/p": { custom: { deep: nested } } as RouteRuleConfig }),
+    ).toThrow(/__proto__/);
+  });
+
   it("accepts JSON-safe options including `false` resets and null", () => {
     expect(() =>
       compileFindRouteRules({

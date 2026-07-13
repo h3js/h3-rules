@@ -130,6 +130,18 @@ function assertSerializableOptions(value: unknown, entry: RouteRuleEntry, path: 
   const proto = typeof value === "object" ? Object.getPrototypeOf(value) : undefined;
   if (proto === Object.prototype || proto === null) {
     for (const [key, item] of Object.entries(value as object)) {
+      // `JSON.stringify` emits an own enumerable `__proto__` as a `"__proto__"`
+      // member, but the compiler embeds that JSON as a JS **object literal**, where
+      // a `"__proto__"` key is the prototype-setter production (ECMA-262
+      // `__proto__` PropertyDefinition) — not a data property. So the compiled
+      // object would silently drop the key and adopt a new prototype, diverging
+      // from the runtime matcher (which carries it as data). This is the one place
+      // JSON and JS-literal semantics disagree; refuse it rather than diverge.
+      if (key === "__proto__") {
+        throw new Error(
+          `[h3-rules] compiler: \`${entry.name}\` rule for \`${entry.route}\` has a \`__proto__\` key at \`${path}\` — it cannot be embedded as a JS object literal without changing the object's prototype (its JSON.stringify output would diverge from the runtime matcher); rename or remove it`,
+        );
+      }
       assertSerializableOptions(item, entry, `${path}.${key}`);
     }
     return;
