@@ -90,6 +90,41 @@ describe("cors rule", () => {
     expect(guarded.status).toBe(401);
   });
 
+  it("drops credentials when a merge re-forms wildcard-origin + credentials", async () => {
+    // Per-key normalization rejects `credentials: true` + wildcard origin, but
+    // merge is shallow and least→most specific: a broad credentialed allowlist
+    // narrowed by a more specific `origin: "*"` re-forms the forbidden pair
+    // *after* normalization (which never re-runs). h3 would emit
+    // `Access-Control-Allow-Origin: *` + `Access-Control-Allow-Credentials: true`
+    // — rejected by browsers. The cors handler neutralizes it by dropping
+    // `credentials`, matching h3's own wildcard-emission condition.
+    const app = createApp({
+      "/api/cred/**": { cors: { credentials: true, origin: ["https://a.com"] } },
+      "/api/cred/wide": { cors: { origin: "*" } },
+    });
+    app.get("/api/cred/wide", () => "ok");
+    const res = await app.fetch(
+      new Request("http://test/api/cred/wide", { headers: { origin: "https://evil.com" } }),
+    );
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.headers.get("access-control-allow-credentials")).toBe(null);
+  });
+
+  it("keeps credentials for an array origin allowlist re-formed by merge", async () => {
+    // Array allowlists never yield a wildcard ACAO (h3 reflects the specific
+    // origin), so a credentialed array origin must survive the guard intact.
+    const app = createApp({
+      "/api/cred2/**": { cors: { credentials: true, origin: ["https://a.com"] } },
+      "/api/cred2/more": { cors: { origin: ["https://a.com", "https://c.com"] } },
+    });
+    app.get("/api/cred2/more", () => "ok");
+    const res = await app.fetch(
+      new Request("http://test/api/cred2/more", { headers: { origin: "https://c.com" } }),
+    );
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://c.com");
+    expect(res.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+
   it("cors: false resets an inherited cors rule", async () => {
     const app = createApp({ "/api/**": { cors: true }, "/api/no-cors": { cors: false } });
     app.get("/api/no-cors", () => "ok");
