@@ -1,7 +1,7 @@
 import { H3 } from "h3";
 import { describe, expect, it } from "vitest";
 import { routeRules } from "../src/h3.ts";
-import { isPathInScope } from "../src/internal/scope.ts";
+import { canonicalPath, isPathInScope } from "../src/internal/scope.ts";
 import { proxy } from "../src/proxy.ts";
 import { resolveRuleTarget } from "../src/rules/_utils.ts";
 import type { RouteRuleConfig } from "../src/types.ts";
@@ -220,6 +220,25 @@ describe("redirect rule", () => {
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).not.toMatch(/^\/\//);
     expect(res.headers.get("location")).toBe("/evil.com");
+  });
+
+  it("collapses an *encoded* leading separator (protocol-relative after decode)", async () => {
+    // The literal `//` collapse above has an encoded twin: a base-less target's
+    // leading `%2f`/`%5c` (or `//%2f`) is opaque to us but a `%2f`-decoding
+    // downstream reads `/%2f%2fevil.com` as `//evil.com` — a protocol-relative
+    // open redirect. The leading-separator-run collapse must fold every form h3
+    // decodes to `/`, mirroring the dual-path decode model, so none escape.
+    const app = createApp({ "/**": { redirect: "/**" } });
+    for (const raw of ["/%2f%2fevil.com", "/%2fevil.com", "/%5c%5cevil.com", "//%2fevil.com"]) {
+      const res = await app.fetch(new Request("http://test" + raw));
+      expect(res.status).toBe(307);
+      // Must not decode (downstream) to a protocol-relative `//host`.
+      expect(canonicalPath(res.headers.get("location")!)).not.toMatch(/^\/\//);
+      expect(res.headers.get("location")).toBe("/evil.com");
+    }
+    // Interior opaque `%2f` is still forwarded verbatim (not a leading leak).
+    const kept = await app.fetch(new Request("http://test/a%2fb"));
+    expect(kept.headers.get("location")).toBe("/a%2fb");
   });
 
   it("forwards the raw encoded pathname (opaque %2f)", async () => {

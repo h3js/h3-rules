@@ -10,6 +10,14 @@ import type { ProxyRuleOptions, RedirectRuleOptions } from "../types.ts";
  */
 export type RuleTargetResolver = (event: H3Event) => string;
 
+// A *leading* run of one-or-more path separators in every form h3's
+// `resolveDotSegments` decodes to `/` (literal `/`/`\`, encoded `%2f`/`%5c` at
+// any `%25`-nesting depth — mirrors h3's `ENCODED_SEP_RE` and scope.ts's
+// `SEPARATOR_RUN_RE`). Used to collapse a base-less wildcard target's leading
+// separators so a `%2f`/`%5c`-decoding downstream cannot resolve it as a
+// protocol-relative `//host` URL.
+const LEADING_SEPARATOR_RUN_RE = /^(?:[/\\]|%(?:25)*(?:2f|5c))+/i;
+
 /**
  * Prepare the target resolver for a `redirect`/`proxy` rule, or `undefined`
  * when the rule has no target. Everything derived solely from the rule's static
@@ -63,8 +71,14 @@ export function prepareRuleTarget(
           throw new HTTPError({ status: 400 });
         }
         targetPath = withoutBase(targetPath, base);
-      } else if (targetPath.startsWith("//")) {
-        targetPath = targetPath.replace(/^\/+/, "/");
+      } else {
+        // Collapse a *leading* run of separators in every form h3's
+        // `resolveDotSegments` decodes to `/` (literal `/`/`\`, encoded
+        // `%2f`/`%5c` at any `%25`-nesting) so a downstream that decodes them
+        // cannot read the forwarded base-less target as a protocol-relative
+        // `//host` URL. Interior separators stay opaque (forwarded verbatim) —
+        // only the leading position can leak. A plain single `/` is a no-op.
+        targetPath = targetPath.replace(LEADING_SEPARATOR_RUN_RE, "/");
       }
       const resolved = joinURL(baseTarget, targetPath);
       // Enforce scope on the *final* forwarded target, not just the incoming
