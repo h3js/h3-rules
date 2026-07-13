@@ -2,6 +2,16 @@ import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import type { MatchedRouteRule, MatchedRouteRules } from "./types.ts";
 
 /**
+ * Whether an alternate (canonical / slash-merged) reading's rule may override an
+ * already-resolved rule of the same name: `true` only when the incoming rule's
+ * matched pattern is equal to, or strictly more specific than, the current one.
+ * Injected (not imported) so `merge.ts` stays free of `rou3` and compiled
+ * matchers that don't wire it remain tree-shakeable. When omitted the union keeps
+ * its historical unconditional-override behavior.
+ */
+export type RouteOverridePredicate = (currentRoute: string, incomingRoute: string) => boolean;
+
+/**
  * A single rule entry as stored in the matcher (one per rule name of a pattern).
  * This is the unit produced by exploding a normalized `RouteRules` object and the
  * shape carried in each rou3 layer's `.data` array (also emitted by the compiler).
@@ -29,35 +39,61 @@ export interface RouteRuleLayer {
  * canonical (decoded) path and the slash-merged canonical path independently — so
  * a rule's `false` reset only affects the path it is configured for — then union
  * in order: each later pass can **add or override, never delete**, a rule an
- * earlier path resolved. On overlap the later (more decoded) rule wins because it
- * is applied last, regardless of whether its pattern is more or less specific
- * than the raw match. The merged-canonical pass mirrors the second interpretation
+ * earlier path resolved. On overlap the later (more decoded) rule wins **only when
+ * `canOverride` allows it** — its pattern must be equal to, or more specific than,
+ * the current one — so a narrower canonical gate wins but a broader canonical
+ * pattern can never downgrade a narrower rule the served path resolved (see
+ * {@link unionLayers}). Omitting `canOverride` keeps the historical unconditional
+ * override. The merged-canonical pass mirrors the second interpretation
  * `isPathInScope` uses: it recovers a narrower gate on the path a slash-merging
  * downstream would resolve (a `..` next to an encoded separator whose empty
  * segment h3's canonical form otherwise keeps).
  *
- * Pure: the caller supplies already-matched layers (least → most specific).
+ * Pure: the caller supplies already-matched layers (least → most specific) and the
+ * (pure) `canOverride` specificity predicate.
  */
 export function mergeMatchedRouteRules(
   rawLayers: RouteRuleLayer[] | undefined,
   canonicalLayers?: RouteRuleLayer[] | undefined,
   mergedLayers?: RouteRuleLayer[] | undefined,
+  canOverride?: RouteOverridePredicate,
 ): MatchedRouteRules {
   const routeRules = resolveLayers(rawLayers);
-  unionLayers(routeRules, canonicalLayers);
-  unionLayers(routeRules, mergedLayers);
+  unionLayers(routeRules, canonicalLayers, canOverride);
+  unionLayers(routeRules, mergedLayers, canOverride);
   return routeRules;
 }
 
 // Union one alternate reading's resolved rules onto the accumulated set. Each
 // reading is resolved on its own (so its `false` resets stay local), then merged
 // in — add or override only, since a resolved set never carries a `false` option.
-function unionLayers(routeRules: MatchedRouteRules, layers: RouteRuleLayer[] | undefined): void {
+//
+// Security: a later (more decoded) pass may **add** a rule the served path missed,
+// but may **override** one it already resolved *only when `canOverride` allows it*
+// — i.e. the incoming pattern is equal to, or strictly more specific than, the
+// current one (the narrower canonical gate winning — e.g. `/app/admin/**` auth over
+// a broad `/app/**` rule for `/app/admin%2fpanel`). It must NOT let a *broader*
+// canonical pattern override a narrower rule the served (raw) path already
+// resolved: a crafted encoded-dot path can canonicalize *up* to a broad pattern
+// (`/app/admin/x/%2e%2e/%2e%2e/%2e%2e/y` → `/y`), and letting that broad rule win
+// would downgrade the strict gate the served admin path actually hits. When the
+// two patterns are not orderable by containment (`disjoint`/`partial`), `canOverride`
+// fails closed and keeps the served path's rule. Callers that don't inject a
+// predicate keep the historical unconditional-override behavior.
+function unionLayers(
+  routeRules: MatchedRouteRules,
+  layers: RouteRuleLayer[] | undefined,
+  canOverride?: RouteOverridePredicate,
+): void {
   if (!layers?.length) {
     return;
   }
   const resolved = resolveLayers(layers);
   for (const rule of Object.values(resolved) as MatchedRouteRule[]) {
+    const current = routeRules[rule.name as keyof MatchedRouteRules];
+    if (current && canOverride && !canOverride(current.route, rule.route)) {
+      continue;
+    }
     mergeRouteRule(routeRules, rule, rule.params);
   }
 }

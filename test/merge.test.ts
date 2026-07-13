@@ -355,6 +355,41 @@ describe("dual-path union (Nitro #4396)", () => {
     expect(routeRules.basicAuth!.options).toMatchObject({ realm: "Broad" });
   });
 
+  it("a broader canonical rule never DOWNGRADES a narrower rule the served path resolved", () => {
+    // Encoded-dot escalation: a crafted `%2e%2e` path is served (raw) under a
+    // strict narrow gate but canonicalizes *up* to a broad weak rule. The union
+    // may only override with an equal-or-more-specific pattern, so the broad rule
+    // must NOT weaken the strict gate the served admin path hits.
+    // Raw `/app/admin/x/%2e%2e/%2e%2e/%2e%2e/y` matches `/app/admin/**` (h3 serves
+    // the admin handler on this literal path); canonical collapses to `/y`, which
+    // matches only `/**`.
+    const match = matcher({
+      "/**": { basicAuth: { username: "guest", password: "guest" } },
+      "/app/admin/**": {
+        basicAuth: { username: "admin", password: "s3cret", realm: "Admin" },
+      },
+    });
+    const { routeRules } = match("GET", "/app/admin/x/%2e%2e/%2e%2e/%2e%2e/y");
+    // Strict admin credentials must survive — not be shallow-merged down to guest.
+    expect(routeRules.basicAuth!.options).toMatchObject({
+      username: "admin",
+      password: "s3cret",
+    });
+  });
+
+  it("a narrower canonical gate still OVERRIDES a broader raw rule (strengthen path intact)", () => {
+    // Guard the other direction: the specificity gate must not block a legitimate
+    // strengthen. `/app/admin%2fpanel` is served under `/app/**` (headers) on the
+    // raw path; the canonical `/app/admin/panel` reveals the narrower auth gate.
+    const match = matcher({
+      "/app/**": { headers: { "x-app": "1" } },
+      "/app/admin/**": { basicAuth: { username: "admin", password: "secret" } },
+    });
+    const { routeRules } = match("GET", "/app/admin%2fpanel");
+    expect(routeRules.basicAuth!.options).toMatchObject({ username: "admin" });
+    expect(routeRules.headers!.options).toEqual({ "x-app": "1" });
+  });
+
   it("a single-wildcard rule still applies to a raw path with an encoded separator", () => {
     // Mirrors `/single-headers/*`: h3 serves the raw single-segment path, so
     // rules matched there must not be dropped by canonicalization.

@@ -1,8 +1,8 @@
-import { addRoute, createRouter, findAllRoutes } from "rou3";
+import { addRoute, compareRoutes, createRouter, findAllRoutes } from "rou3";
 import type { RouterContext } from "rou3";
 import { parseRouteKey } from "./internal/key.ts";
 import { mergeMatchedRouteRules } from "./merge.ts";
-import type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
+import type { RouteOverridePredicate, RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
 import { preMergeRuleLayers } from "./internal/premerge.ts";
 import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import { ruleHandlers } from "./rules/index.ts";
@@ -164,8 +164,27 @@ export function createRouteRulesMatcher(
   // Memoization is opt-in via {@link memoizeRouteRulesMatcher} — wrap the
   // returned matcher explicitly. Keeping it decoupled from this constructor (and
   // from createMatcherFromFind) lets an un-memoized bundle tree-shake it away.
-  return createMatcherFromFind(findRouteRules);
+  //
+  // Inject the specificity guard so an alternate (canonical / slash-merged)
+  // reading can only override a rule the served path resolved with an
+  // equal-or-more-specific pattern — never downgrade it with a broader one. The
+  // predicate is referenced only here, so a compiled bundle that imports just
+  // `createMatcherFromFind` tree-shakes `compareRoutes` (and the rest of rou3) out.
+  return createMatcherFromFind(findRouteRules, canOverrideRoute);
 }
+
+// A later reading may override an already-resolved rule of the same name only
+// when its matched pattern is equal to, or strictly more specific than, the
+// current one. `compareRoutes(current, incoming)` is `"superset"` when `current`
+// is broader (incoming narrower ⇒ override) and `"equal"` when identical;
+// `"subset"`/`"disjoint"`/`"partial"` all keep the served path's rule (fail closed).
+const canOverrideRoute: RouteOverridePredicate = (currentRoute, incomingRoute) => {
+  if (currentRoute === incomingRoute) {
+    return true;
+  }
+  const rel = compareRoutes(currentRoute, incomingRoute);
+  return rel === "superset" || rel === "equal";
+};
 
 /**
  * Create a matcher from a `findAllRoutes`-compatible lookup — the integration
@@ -177,8 +196,17 @@ export function createRouteRulesMatcher(
  * {@link memoizeRouteRulesMatcher} away. Opt in by composing it explicitly —
  * `memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules))`. The same
  * composition wraps the matcher from `createRouteRulesMatcher`.
+ *
+ * `canOverride` gates the dual-path union's override step (see
+ * {@link mergeMatchedRouteRules}): when omitted, a later (more decoded) reading
+ * overrides unconditionally (historical behavior); `createRouteRulesMatcher`
+ * injects a rou3-backed specificity guard so a broader canonical pattern can
+ * never downgrade a narrower rule the served path resolved.
  */
-export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRulesMatcher {
+export function createMatcherFromFind(
+  findRouteRules: FindRouteRules,
+  canOverride?: RouteOverridePredicate,
+): RouteRulesMatcher {
   return (method, pathname) => {
     // h3 routes the served handler/middleware on the raw `pathname` (`%2f`/`%5c` stay opaque)
     // so the rules the raw path matches describe the handler that actually runs and must all apply.
@@ -219,10 +247,16 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
     // encoded separator can neither dodge a rule nor strip one off the path that is
     // actually served. On overlap the canonical rule wins because it is applied
     // last (e.g. the `/app/admin/**` auth gate over a broad `/app/**` rule for
-    // `/app/admin%2fpanel`) — this is unconditional, not a specificity comparison,
-    // so a canonical match from a broader pattern also overrides the raw options.
+    // `/app/admin%2fpanel`) — but only when `canOverride` allows it: a broader
+    // canonical pattern must not downgrade a narrower rule the served path
+    // resolved (a crafted `%2e%2e` path can canonicalize *up* to a broad rule).
     // Proxy/redirect still forward the raw `event.url.pathname`.
-    const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers, mergedLayers);
+    const routeRules = mergeMatchedRouteRules(
+      rawLayers,
+      canonicalLayers,
+      mergedLayers,
+      canOverride,
+    );
 
     // Build the ordered middleware array from merged rules. Rules without a
     // handler (data-only) are skipped; handlers run sorted by `order` ascending
