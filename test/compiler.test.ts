@@ -122,6 +122,48 @@ describe("compiler parity", () => {
     }
   });
 
+  it("compiled matcher export blocks broader-pattern auth downgrade (matches runtime)", () => {
+    // The runtime guard against a broader canonical/merged pattern DOWNGRADING a
+    // narrower rule the served path resolved lives in `createRouteRulesMatcher`
+    // (injected `canOverride`). The compiled `matcher` export must reach parity by
+    // baking that predicate — otherwise a crafted `%2e%2e` path that canonicalizes
+    // *up* to the broad `/**` rule would replace the strict admin credentials with
+    // the site-wide guest ones.
+    const config = {
+      "/**": { basicAuth: { username: "guest", password: "guest" } },
+      "/app/admin/**": { basicAuth: { username: "admin", password: "s3cret", realm: "Admin" } },
+    };
+    const runtime = createRouteRulesMatcher(normalizeRouteRules(config), {
+      handlers: FIXTURE_HANDLERS,
+    });
+    const compiled = evaluateModule(compileRouteRules(config, { matcher: true }));
+    const payload = "/app/admin/x/%2e%2e/%2e%2e/%2e%2e/y";
+    const basicAuth = compiled("GET", payload).routeRules.basicAuth as {
+      options: { username: string };
+    };
+    // The strict admin gate survives — not downgraded to guest:guest.
+    expect(basicAuth.options.username).toBe("admin");
+    expect(snapshotResult(compiled("GET", payload))).toEqual(
+      snapshotResult(runtime("GET", payload)),
+    );
+  });
+
+  it("bakes an override table for overlapping patterns (broad→narrow only)", () => {
+    // Sanity on the emitted predicate: `/**` (broad) may be overridden by the
+    // narrower `/app/admin/**`, never the reverse, and rou3 stays out of the
+    // emitted source (the containment relation is a build-time static table).
+    const mod = compileRouteRules(
+      {
+        "/**": { basicAuth: { username: "guest", password: "guest" } },
+        "/app/admin/**": { basicAuth: { username: "admin", password: "s3cret" } },
+      },
+      { matcher: true },
+    );
+    expect(mod.body).toContain('new Map([["/**", new Set(["/app/admin/**"])]])');
+    expect(mod.code).not.toContain("rou3");
+    expect(mod.code).not.toContain("compareRoutes");
+  });
+
   it("compiled matcher works with baseURL", () => {
     // Already-normalized input is equally valid compiler input (idempotent
     // normalization) — the runtime matcher requires it either way.
@@ -299,7 +341,7 @@ describe("generated code shape", () => {
     );
     expect(mod.body).toContain("export const findRouteRules = ");
     expect(mod.body.trimEnd()).toMatch(
-      /export const matcher = createMatcherFromFind\(findRouteRules\);$/,
+      /export const matcher = createMatcherFromFind\(findRouteRules, \(a, b\) => a === b\);$/,
     );
     expect(mod.code).toBe(`${mod.imports}\n${mod.body}`);
   });
@@ -307,14 +349,14 @@ describe("generated code shape", () => {
   it("names the matcher export from a string / { name }", () => {
     const fromString = compileRouteRules({ "/a": { redirect: "/b" } }, { matcher: "routeMatcher" });
     expect(fromString.body).toContain(
-      "export const routeMatcher = createMatcherFromFind(findRouteRules);",
+      "export const routeMatcher = createMatcherFromFind(findRouteRules, (a, b) => a === b);",
     );
     const fromObject = compileRouteRules(
       { "/a": { redirect: "/b" } },
       { matcher: { name: "routeMatcher" } },
     );
     expect(fromObject.body).toContain(
-      "export const routeMatcher = createMatcherFromFind(findRouteRules);",
+      "export const routeMatcher = createMatcherFromFind(findRouteRules, (a, b) => a === b);",
     );
   });
 
@@ -327,7 +369,7 @@ describe("generated code shape", () => {
       'import { createMatcherFromFind, memoizeRouteRulesMatcher } from "h3-rules";',
     );
     expect(memo.body).toContain(
-      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules));",
+      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules, (a, b) => a === b));",
     );
   });
 
@@ -337,14 +379,16 @@ describe("generated code shape", () => {
       { matcher: { memoize: { max: 256 } } },
     );
     expect(mod.body).toContain(
-      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules), { max: 256 });",
+      "export const matcher = memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules, (a, b) => a === b), { max: 256 });",
     );
   });
 
   it("emits the matcher export with no handler import for a data-only rule set", () => {
     const mod = compileRouteRules({ "/a": { prerender: true } }, { matcher: true });
     expect(mod.imports).toBe('import { createMatcherFromFind } from "h3-rules";');
-    expect(mod.body).toContain("export const matcher = createMatcherFromFind(findRouteRules);");
+    expect(mod.body).toContain(
+      "export const matcher = createMatcherFromFind(findRouteRules, (a, b) => a === b);",
+    );
   });
 
   it("throws when the matcher export name is not a valid JS identifier", () => {

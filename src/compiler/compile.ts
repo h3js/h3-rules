@@ -3,11 +3,13 @@ import { compileRouterToString } from "rou3/compiler";
 import { createRulesRouter } from "../match.ts";
 import type { RouteRuleEntry } from "../merge.ts";
 import { normalizeRouteRules } from "../normalize.ts";
+import { parseRouteKey } from "../internal/key.ts";
 import type { PreMergedRouteRules } from "../internal/premerge.ts";
 import type { RouteRuleConfig, RouteRules } from "../types.ts";
 import {
   assertHandlerBinding,
   compileMatcherExport,
+  compileOverridePredicate,
   serializePreMergedRouteRules,
   serializeRouteRuleEntries,
 } from "./codegen.ts";
@@ -44,8 +46,13 @@ export function compileRouteRules(
   const handlerImports = emitHandlersImport(ctx);
   // Optional matcher export: its infra import joins the handler imports (both
   // hoistable), its declaration follows `findRouteRules` in the body (it
-  // references that local binding). `null` when no matcher is requested.
-  const matcherExport = compileMatcherExport(opts.matcher);
+  // references that local binding). `null` when no matcher is requested. The
+  // baked override predicate (built only when a matcher is requested) gives the
+  // ready-to-use compiled matcher the same specificity guard as the runtime
+  // `createRouteRulesMatcher`.
+  const matcherExport = opts.matcher
+    ? compileMatcherExport(opts.matcher, compileOverridePredicate(collectRoutes(ctx)))
+    : null;
   const imports = [handlerImports, matcherExport?.imports].filter(Boolean).join("\n");
   const find = `export const findRouteRules = ${emitFindRouteRules(ctx)};\n`;
   const body = matcherExport ? find + matcherExport.body : find;
@@ -233,6 +240,20 @@ function emitHandlersImport(ctx: CompileCtx): string {
  * handlers {@link emitFindRouteRules} references and {@link emitHandlersImport}
  * imports.
  */
+/**
+ * The distinct registered pattern strings (rule keys' path part) — the only
+ * values that can reach the override predicate as a matched entry's `route`.
+ * Matches the un-prefixed `route` the runtime guard compares (baseURL is a
+ * uniform prefix that does not change containment).
+ */
+function collectRoutes(ctx: CompileCtx): string[] {
+  const routes = new Set<string>();
+  for (const key in ctx.rules) {
+    routes.add(parseRouteKey(key).path);
+  }
+  return [...routes];
+}
+
 function usedRuleHandlerNames(ctx: CompileCtx): string[] {
   const used = new Set<string>();
   for (const key in ctx.rules) {
