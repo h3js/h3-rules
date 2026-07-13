@@ -25,27 +25,41 @@ export interface RouteRuleLayer {
 }
 
 /**
- * Dual-path merge + union. Resolve the raw (served) path and,
- * if provided, the canonical (decoded) path independently — so a rule's `false`
- * reset only affects the path it is configured for — then union: the canonical
- * pass can **add or override, never delete**, a rule the raw path resolved. On
- * overlap the canonical rule wins (it is applied last), regardless of whether
- * its pattern is more or less specific than the raw match.
+ * Multi-path merge + union. Resolve the raw (served) path and, if provided, the
+ * canonical (decoded) path and the slash-merged canonical path independently — so
+ * a rule's `false` reset only affects the path it is configured for — then union
+ * in order: each later pass can **add or override, never delete**, a rule an
+ * earlier path resolved. On overlap the later (more decoded) rule wins because it
+ * is applied last, regardless of whether its pattern is more or less specific
+ * than the raw match. The merged-canonical pass mirrors the second interpretation
+ * `isPathInScope` uses: it recovers a narrower gate on the path a slash-merging
+ * downstream would resolve (a `..` next to an encoded separator whose empty
+ * segment h3's canonical form otherwise keeps).
  *
  * Pure: the caller supplies already-matched layers (least → most specific).
  */
 export function mergeMatchedRouteRules(
   rawLayers: RouteRuleLayer[] | undefined,
   canonicalLayers?: RouteRuleLayer[] | undefined,
+  mergedLayers?: RouteRuleLayer[] | undefined,
 ): MatchedRouteRules {
   const routeRules = resolveLayers(rawLayers);
-  if (canonicalLayers?.length) {
-    const canonicalRules = resolveLayers(canonicalLayers);
-    for (const rule of Object.values(canonicalRules) as MatchedRouteRule[]) {
-      mergeRouteRule(routeRules, rule, rule.params);
-    }
-  }
+  unionLayers(routeRules, canonicalLayers);
+  unionLayers(routeRules, mergedLayers);
   return routeRules;
+}
+
+// Union one alternate reading's resolved rules onto the accumulated set. Each
+// reading is resolved on its own (so its `false` resets stay local), then merged
+// in — add or override only, since a resolved set never carries a `false` option.
+function unionLayers(routeRules: MatchedRouteRules, layers: RouteRuleLayer[] | undefined): void {
+  if (!layers?.length) {
+    return;
+  }
+  const resolved = resolveLayers(layers);
+  for (const rule of Object.values(resolved) as MatchedRouteRule[]) {
+    mergeRouteRule(routeRules, rule, rule.params);
+  }
 }
 
 // Resolve the matched layers (least → most specific) of a single path into a

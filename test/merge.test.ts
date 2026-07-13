@@ -308,6 +308,53 @@ describe("dual-path union (Nitro #4396)", () => {
     expect(match("GET", "/rules/ba-strip/off/x").routeRules.basicAuth).toBeUndefined();
   });
 
+  it("a `..` next to an encoded separator cannot dodge a narrower gate on a slash-merging downstream", () => {
+    // Report vuln-12006 (HackerOne #3721382): h3's canonical form keeps the
+    // empty segment a `..` adjacent to an encoded separator produces
+    // (`/api/foo/%2e%2e/%2fadmin/secret` → `/api//admin/secret`), so rou3's
+    // per-segment match misses `/api/admin/**` and `basicAuth` never runs — yet a
+    // downstream that decodes `%2f` then merges slashes resolves it to
+    // `/api/admin/secret`. The matcher must also match the slash-merged canonical
+    // reading (`/api/admin/secret`), like `isPathInScope` already does for scope.
+    const match = matcher({
+      "/api/**": { headers: { "x-app": "1" } },
+      "/api/admin/**": { basicAuth: { username: "admin", password: "secret" } },
+    });
+    // Baseline: the raw and canonical-only variants already fire.
+    expect(match("GET", "/api/admin/secret").routeRules.basicAuth).toBeDefined();
+    expect(match("GET", "/api/foo/%2e%2e%2fadmin/secret").routeRules.basicAuth).toBeDefined();
+    expect(match("GET", "/api/foo/..%2fadmin/secret").routeRules.basicAuth).toBeDefined();
+    // The surviving bypass: `..` separated from `%2f` by a literal `/`.
+    for (const payload of [
+      "/api/foo/%2e%2e/%2fadmin/secret",
+      "/api/foo/..%2f%2fadmin/secret",
+      "/api/foo/%2e%2e%2f%2fadmin/secret",
+      "/api/foo/%2e%2e/%5cadmin/secret",
+      "/api/foo/%252e%252e/%252fadmin/secret",
+    ]) {
+      const { routeRules } = match("GET", payload);
+      expect(routeRules.basicAuth, payload).toBeDefined();
+      expect(routeRules.basicAuth!.options, payload).toMatchObject({ username: "admin" });
+      // union-only: the broad rule the raw path resolved is never stripped.
+      expect(routeRules.headers!.options, payload).toEqual({ "x-app": "1" });
+    }
+  });
+
+  it("the slash-merged lookup never strips a rule the raw path resolved (union-only)", () => {
+    // A benign doubled slash whose merged canonical form lands on a `false`-reset
+    // subtree must not delete the rule the served path resolved.
+    const match = matcher({
+      "/api/**": {
+        basicAuth: { username: "admin", password: "secret", realm: "Broad" },
+      },
+      "/api/off/**": { basicAuth: false },
+    });
+    // Raw path stays a single opaque segment under `/api/**`; the merged reading
+    // (`/api/off/x`) hits the reset but union-only must keep the broad rule.
+    const { routeRules } = match("GET", "/api/off%2f%2fx");
+    expect(routeRules.basicAuth!.options).toMatchObject({ realm: "Broad" });
+  });
+
   it("a single-wildcard rule still applies to a raw path with an encoded separator", () => {
     // Mirrors `/single-headers/*`: h3 serves the raw single-segment path, so
     // rules matched there must not be dropped by canonicalization.

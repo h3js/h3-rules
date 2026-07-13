@@ -6,7 +6,7 @@ import type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
 import { preMergeRuleLayers } from "./internal/premerge.ts";
 import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import { ruleHandlers } from "./rules/index.ts";
-import { canonicalPath } from "./internal/scope.ts";
+import { canonicalPath, mergedCanonicalPath } from "./internal/scope.ts";
 import type {
   MatchResult,
   MatchedRouteRule,
@@ -187,7 +187,20 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
     const canonical = canonicalPath(pathname);
     const canonicalLayers = canonical === pathname ? undefined : findRouteRules(method, canonical);
 
-    if (!rawLayers?.length && !canonicalLayers?.length) {
+    // h3's canonical form keeps the empty `//` segment a `..` adjacent to an
+    // encoded separator produces (e.g. `/app/foo/%2e%2e/%2fadmin` → `/app//admin`),
+    // and rou3 won't match an empty segment against `/admin/**` — so a downstream
+    // that decodes `%2f` then merges slashes (nginx `merge_slashes`) could reach a
+    // path a narrower gate guards while that gate never ran. Also match the
+    // slash-merged canonical reading (`/app/admin`) to catch it. Mirrors the second
+    // interpretation in isPathInScope; unioned last so the narrower gate wins.
+    const merged = mergedCanonicalPath(pathname);
+    const mergedLayers =
+      merged !== undefined && merged !== canonical && merged !== pathname
+        ? findRouteRules(method, merged)
+        : undefined;
+
+    if (!rawLayers?.length && !canonicalLayers?.length && !mergedLayers?.length) {
       // Fresh objects on purpose: only *memoized* results are documented as
       // shared/read-only — un-memoized consumers may mutate the result. Hot
       // no-match paths hit the memo when composed with memoizeRouteRulesMatcher.
@@ -204,7 +217,7 @@ export function createMatcherFromFind(findRouteRules: FindRouteRules): RouteRule
     // `/app/admin%2fpanel`) — this is unconditional, not a specificity comparison,
     // so a canonical match from a broader pattern also overrides the raw options.
     // Proxy/redirect still forward the raw `event.url.pathname`.
-    const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers);
+    const routeRules = mergeMatchedRouteRules(rawLayers, canonicalLayers, mergedLayers);
 
     // Build the ordered middleware array from merged rules. Rules without a
     // handler (data-only) are skipped; handlers run sorted by `order` ascending

@@ -26,6 +26,24 @@ export function canonicalPath(pathname: string): string {
 const SEPARATOR_RUN_RE = /(?:[/\\]|%(?:25)*(?:2f|5c))(?:[/\\]|%(?:25)*(?:2f|5c))+/gi;
 
 /**
+ * Canonical form under a slash-merging downstream: collapse separator runs (the
+ * empty `//` segments h3's canonical form preserves) *before* resolving dot
+ * segments, so a `..` adjacent to an encoded separator is no longer shielded by
+ * an empty segment. Returns `undefined` when collapsing is a no-op (no separator
+ * run to merge) — the caller already has the plain canonical reading.
+ *
+ * This is the matcher's counterpart to the second interpretation `isPathInScope`
+ * uses for scope: a downstream that decodes `%2f` then merges slashes (nginx
+ * `merge_slashes`, or any backend that normalizes) resolves the empty segments,
+ * so a narrower rule (e.g. a `basicAuth` gate) guarding that resolved path must
+ * still match. Never use the result for routing/dispatch or forwarding.
+ */
+export function mergedCanonicalPath(pathname: string): string | undefined {
+  const merged = pathname.replace(SEPARATOR_RUN_RE, "/");
+  return merged === pathname ? undefined : canonicalPath(merged);
+}
+
+/**
  * Whether `pathname` stays within `base` once canonicalized. Security-critical:
  * an encoded traversal like `..%2f` must not let a request escape a `/**`
  * proxy/redirect scope once the downstream decodes it. An empty base allows
@@ -45,8 +63,8 @@ export function isPathInScope(pathname: string, base: string): boolean {
   if (!isCanonicalInScope(canonicalPath(pathname), base)) {
     return false;
   }
-  const merged = pathname.replace(SEPARATOR_RUN_RE, "/");
-  return merged === pathname || isCanonicalInScope(canonicalPath(merged), base);
+  const mergedCanonical = mergedCanonicalPath(pathname);
+  return mergedCanonical === undefined || isCanonicalInScope(mergedCanonical, base);
 }
 
 function isCanonicalInScope(canonical: string, base: string): boolean {

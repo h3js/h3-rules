@@ -97,6 +97,31 @@ describe("compiler parity", () => {
     );
   });
 
+  it("compiled matcher closes the slash-merged auth bypass (matches runtime)", () => {
+    // The compiler only codegens the route lookup; the raw/canonical/merged
+    // readings live in the shared `createMatcherFromFind`, so the compiled
+    // matcher must reject the same `..`-next-to-encoded-separator bypass
+    // (report vuln-12006) that the runtime matcher does.
+    const config = {
+      "/api/**": { headers: { "x-app": "1" } },
+      "/api/admin/**": { basicAuth: { username: "admin", password: "secret" } },
+    };
+    const runtime = createRouteRulesMatcher(normalizeRouteRules(config), {
+      handlers: FIXTURE_HANDLERS,
+    });
+    const compiled = evaluateCompiled(config);
+    for (const payload of [
+      "/api/foo/%2e%2e/%2fadmin/secret",
+      "/api/foo/..%2f%2fadmin/secret",
+      "/api/foo/%2e%2e%2f%2fadmin/secret",
+    ]) {
+      expect(compiled("GET", payload).routeRules.basicAuth, payload).toBeDefined();
+      expect(snapshotResult(compiled("GET", payload)), payload).toEqual(
+        snapshotResult(runtime("GET", payload)),
+      );
+    }
+  });
+
   it("compiled matcher works with baseURL", () => {
     // Already-normalized input is equally valid compiler input (idempotent
     // normalization) — the runtime matcher requires it either way.
