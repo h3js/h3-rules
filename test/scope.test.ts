@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { canonicalPath, isPathInScope } from "../src/internal/scope.ts";
+import {
+  canonicalPath,
+  isPathInScope,
+  isTriviallyCanonical,
+  mergedCanonicalPath,
+} from "../src/internal/scope.ts";
 
 // An encoded traversal like `..%2f` must
 // not let a request escape a `/**` proxy/redirect scope once the downstream
@@ -132,5 +137,87 @@ describe("canonicalPath", () => {
 
   it("keeps non-separator reserved encodings opaque", () => {
     expect(canonicalPath("/a%3Ab")).toBe("/a%3Ab");
+  });
+});
+
+// The matcher / isPathInScope fast path: `isTriviallyCanonical(p)` must imply
+// that BOTH alternate readings are no-ops — otherwise the fast path would skip
+// a canonicalization step and an encoded path could dodge a rule (an auth/scope
+// bypass, not a perf bug). h3 pins the predicate against `resolveDotSegments`
+// identity; this suite pins the derivation this package layers on top.
+describe("isTriviallyCanonical", () => {
+  it("accepts common request paths", () => {
+    expect(isTriviallyCanonical("/")).toBe(true);
+    expect(isTriviallyCanonical("/api/users/123")).toBe(true);
+    expect(isTriviallyCanonical("/assets/app.1a2b.js")).toBe(true);
+    expect(isTriviallyCanonical("/.well-known/security.txt")).toBe(true);
+    expect(isTriviallyCanonical("/foo%20bar/a%3Ab")).toBe(true);
+  });
+
+  it("rejects every path with an alternate reading", () => {
+    expect(isTriviallyCanonical("/a/../b")).toBe(false);
+    expect(isTriviallyCanonical("/a/%2e%2e/b")).toBe(false);
+    expect(isTriviallyCanonical("/app/admin%2fpanel")).toBe(false);
+    expect(isTriviallyCanonical("/app/admin%5Cpanel")).toBe(false);
+    expect(isTriviallyCanonical("/a%252fb")).toBe(false);
+    expect(isTriviallyCanonical("/a\\b")).toBe(false);
+    expect(isTriviallyCanonical("/a//b")).toBe(false);
+    expect(isTriviallyCanonical("//evil.com")).toBe(false);
+  });
+
+  it("implies canonical identity AND no merged reading (seeded fuzz)", () => {
+    const FRAGMENTS = [
+      "/",
+      "//",
+      "\\",
+      ".",
+      "..",
+      "...",
+      "%2e",
+      "%2E",
+      "%252e",
+      "%2e%2e",
+      "%2f",
+      "%5C",
+      "%252f",
+      "a",
+      "app.js",
+      ".well-known",
+      "..b",
+      "a%2eb",
+      "%20",
+      "%25",
+      "%",
+      "admin",
+      "%2e.",
+      ".%2e",
+      "%25%32%66",
+    ];
+    let seed = 4321;
+    const rand = () => (seed = (seed * 1_103_515_245 + 12_345) & 0x7f_ff_ff_ff) / 0x7f_ff_ff_ff;
+    for (let i = 0; i < 50_000; i++) {
+      let path = rand() < 0.9 ? "/" : "";
+      const length = 1 + Math.floor(rand() * 6);
+      for (let j = 0; j < length; j++) {
+        path += FRAGMENTS[Math.floor(rand() * FRAGMENTS.length)];
+      }
+      if (isTriviallyCanonical(path)) {
+        if (canonicalPath(path) !== path || mergedCanonicalPath(path) !== undefined) {
+          expect.fail(
+            `isTriviallyCanonical(${JSON.stringify(path)}) but an alternate reading exists`,
+          );
+        }
+      } else {
+        // Not required for safety (false negatives only cost a slow-path
+        // call), but the strict predicate should never be lazier than the two
+        // readings it guards — a divergence here means the derivation comment
+        // in scope.ts is stale.
+        if (canonicalPath(path) === path && mergedCanonicalPath(path) === undefined) {
+          expect.fail(
+            `isTriviallyCanonical(${JSON.stringify(path)}) is false but both readings are no-ops`,
+          );
+        }
+      }
+    }
   });
 });

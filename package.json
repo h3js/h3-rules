@@ -47,7 +47,7 @@
     "automd": "latest",
     "changelogen": "latest",
     "esbuild": "^0.28.1",
-    "h3": "^2.0.1-rc.23",
+    "h3": "^2.0.1-rc.26",
     "mitata": "^1.0.34",
     "obuild": "latest",
     "ocache": "^0.2.0",
@@ -57,7 +57,7 @@
     "vitest": "latest"
   },
   "peerDependencies": {
-    "h3": "^2.0.1-rc.25",
+    "h3": "^2.0.1-rc.26",
     "ocache": ">=0.2.0"
   },
   "peerDependenciesMeta": {
