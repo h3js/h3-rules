@@ -6,7 +6,7 @@ import type { RouteOverridePredicate, RouteRuleEntry, RouteRuleLayer } from "./m
 import { preMergeRuleLayers } from "./internal/premerge.ts";
 import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import { ruleHandlers } from "./rules/index.ts";
-import { canonicalPath, mergedCanonicalPath } from "./internal/scope.ts";
+import { canonicalPath, isTriviallyCanonical, mergedCanonicalPath } from "./internal/scope.ts";
 import type {
   MatchResult,
   MatchedRouteRule,
@@ -212,12 +212,17 @@ export function createMatcherFromFind(
     // so the rules the raw path matches describe the handler that actually runs and must all apply.
     const rawLayers = findRouteRules(method, pathname);
 
+    // Fast path: for the common already-canonical pathname (one h3-owned scan,
+    // see isTriviallyCanonical) no alternate reading exists — skip the resolver
+    // and the separator-run collapse entirely.
+    const trivial = isTriviallyCanonical(pathname);
+
     // An encoded separator must not let a request dodge a rule it would still hit
     // once the downstream decodes `%2f`/`%5c` back to `/`
     // e.g. `/app/admin%2fpanel` is served by a broad rule on the raw path but canonicalizes to
     // `/app/admin/panel`, which a narrower (auth) rule guards.
-    // So also match on the canonical path. Fast path: identical paths skip the second lookup.
-    const canonical = canonicalPath(pathname);
+    // So also match on the canonical path. Identical paths skip the second lookup.
+    const canonical = trivial ? pathname : canonicalPath(pathname);
     const canonicalLayers = canonical === pathname ? undefined : findRouteRules(method, canonical);
 
     // h3's canonical form keeps the empty `//` segment a `..` adjacent to an
@@ -227,7 +232,7 @@ export function createMatcherFromFind(
     // path a narrower gate guards while that gate never ran. Also match the
     // slash-merged canonical reading (`/app/admin`) to catch it. Mirrors the second
     // interpretation in isPathInScope; unioned last so the narrower gate wins.
-    const merged = mergedCanonicalPath(pathname);
+    const merged = trivial ? undefined : mergedCanonicalPath(pathname);
     const mergedLayers =
       merged !== undefined && merged !== canonical && merged !== pathname
         ? findRouteRules(method, merged)

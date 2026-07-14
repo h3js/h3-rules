@@ -1,4 +1,8 @@
-import { resolveDotSegments } from "h3";
+import { isCanonicalPath, resolveDotSegments } from "h3";
+
+// Module-scope so the per-request calls below allocate nothing on the fast path.
+const CANONICAL_OPTS = { decodeSlashes: true };
+const STRICT_CANONICAL_OPTS = { decodeSlashes: true, mergeSlashes: true };
 
 // Canonicalize a request pathname for route-rule matching and scope checks.
 //
@@ -15,7 +19,23 @@ import { resolveDotSegments } from "h3";
 // (e.g. a `basicAuth` gate) or escape a `/**` scope that the served path would
 // match. Never use the result for routing/dispatch.
 export function canonicalPath(pathname: string): string {
-  return resolveDotSegments(pathname, { decodeSlashes: true });
+  return resolveDotSegments(pathname, CANONICAL_OPTS);
+}
+
+/**
+ * Whether `pathname` has no alternate reading at all: canonical under h3's
+ * strictest mode (`decodeSlashes` + `mergeSlashes`), which implies both
+ * `canonicalPath(pathname) === pathname` (strict-mode canonical is canonical
+ * in every weaker mode) and `mergedCanonicalPath(pathname) === undefined` (a
+ * separator run needs a `\`, an encoded separator, or a literal `//` — all
+ * strict-mode triggers). One h3-owned scan, so per-request callers skip the
+ * resolver and the run-collapse entirely for the common already-canonical
+ * path — without this package duplicating any knowledge of what h3 decodes
+ * (`isCanonicalPath` is pinned against `resolveDotSegments` identity in h3's
+ * own test suite; the implication above is pinned in `test/scope.test.ts`).
+ */
+export function isTriviallyCanonical(pathname: string): boolean {
+  return isCanonicalPath(pathname, STRICT_CANONICAL_OPTS);
 }
 
 // A run of two-or-more consecutive path separators, counting every form h3's
@@ -60,6 +80,11 @@ export function mergedCanonicalPath(pathname: string): string | undefined {
  * reading, so requiring it in scope too closes that gap.
  */
 export function isPathInScope(pathname: string, base: string): boolean {
+  // Fast path: no alternate reading exists, so the served path is the only
+  // interpretation to check.
+  if (isTriviallyCanonical(pathname)) {
+    return isCanonicalInScope(pathname, base);
+  }
   if (!isCanonicalInScope(canonicalPath(pathname), base)) {
     return false;
   }
