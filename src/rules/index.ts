@@ -4,21 +4,14 @@ import { cors } from "./cors.ts";
 import { headers } from "./headers.ts";
 import { redirect } from "./redirect.ts";
 
-// Note: keep RUNTIME_RULE_NAMES (src/compiler/runtime-rules.ts) in sync when
-// adding rules, and export the handler from src/index.ts (compiled matchers
-// import used handlers by name).
+// Keep RUNTIME_RULE_NAMES (src/compiler/runtime-rules.ts) in sync when adding
+// rules, and export the handler from src/index.ts.
 
 /**
- * Default rule handler registry (base for runtime matchers). Two built-ins are
- * deliberately absent — each is an opt-in subpath export so its dependency stays
- * out of bundles that don't use it:
- * - `cache`: needs a caching implementation — register the ocache-backed one
- *   from `h3-rules/cache` (`handlers: { cache }`) or build your own with
- *   `createCacheRuleHandler` (see `src/rules/cache.ts`).
- * - `proxy`: pulls in h3's `proxyRequest` — register it from `h3-rules/proxy`
- *   (`handlers: { proxy }`, see `src/proxy.ts`).
- *
- * `createRouteRulesMatcher` throws when a rule set uses either without a
+ * Default rule handler registry (base for runtime matchers). `cache` and
+ * `proxy` are deliberately absent — opt-in subpath exports (`h3-rules/cache`,
+ * `h3-rules/proxy`) so their deps stay out of bundles that don't use them.
+ * `createRouteRulesMatcher` throws if a rule set uses either without a
  * registered handler (pass `handlers: { cache: undefined }` / `{ proxy: undefined }`
  * to opt into data-only).
  */

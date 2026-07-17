@@ -14,44 +14,26 @@ export interface CompileRouteRulesOptions {
    */
   handlersImportName?: string;
   /**
-   * Runtime rules that reference a handler (bound `<ns>$<name>`) in generated
-   * code, keyed by rule name. Each value is a {@link RuntimeRuleImport} — a
-   * module id, or `{ source, export }`. Merged **over**
-   * {@link DEFAULT_RUNTIME_RULES}, so you only list custom handlers and
-   * built-in source overrides; the built-ins stay registered otherwise. Keys
-   * bind as JS identifiers in generated code, so they must be valid identifiers.
+   * Runtime rules keyed by rule name, merged **over** `DEFAULT_RUNTIME_RULES`
+   * (list only additions/overrides). Keys bind as JS identifiers in generated
+   * code.
    * @default DEFAULT_RUNTIME_RULES
    */
   runtimeRules?: Record<string, RuntimeRuleImport>;
   /**
-   * Pre-merge each pattern's subsumption chain at compile time so per-request
-   * resolution takes only the most specific matched layer instead of merging
-   * all layers. Exact — but requires a **chain-clean** rule set. Pre-merge is a
-   * throughput optimization, not a correctness requirement, so — unlike the
-   * runtime matcher, which throws — the compiler is **fail-safe**: if the rule
-   * set is not chain-clean (two patterns partially overlap or cannot be
-   * analyzed), it emits a `console.warn` and falls back to plain compilation
-   * instead of failing the build.
+   * Pre-merge each pattern's subsumption chain at compile time (exact, but
+   * requires a **chain-clean** rule set). Unlike the runtime matcher, the
+   * compiler is fail-safe: a non-chain-clean set emits a `console.warn` and
+   * falls back to plain compilation instead of throwing.
    */
   preMerge?: boolean;
 }
 
 /**
- * Controls the optional ready-to-use matcher export {@link compileRouteRules}
- * appends alongside `findRouteRules`. `false`/omitted emits no matcher (the
- * default — take `findRouteRules` and wrap it yourself). Otherwise the module
- * also exports a matcher wrapping the compiled `findRouteRules`:
- *
- * - `true` — `export const matcher = createMatcherFromFind(findRouteRules)`.
- * - a string — same, but named after the string (e.g. `"routeRulesMatcher"`).
- * - `{ name?, memoize? }` — rename the export and/or bake in memoization
- *   (`memoizeRouteRulesMatcher(createMatcherFromFind(findRouteRules))`; pass
- *   `memoize: { max }` to tune the cap). `memoizeRouteRulesMatcher` is imported
- *   **only** when `memoize` is set, so an un-memoized matcher export still
- *   tree-shakes it away.
- *
- * `createMatcherFromFind` (and, with `memoize`, `memoizeRouteRulesMatcher`) is
- * imported from `h3-rules` and counts toward {@link CompiledRouteRules.imports}.
+ * Optional matcher export appended alongside `findRouteRules`; `true`/string
+ * wraps it in `createMatcherFromFind` (optionally renamed). `memoize` bakes in
+ * `memoizeRouteRulesMatcher`, imported only when set — an un-memoized export
+ * still tree-shakes it away.
  */
 export type MatcherExport =
   | boolean
@@ -59,42 +41,33 @@ export type MatcherExport =
   | { name?: string; memoize?: boolean | MatcherMemoizeOptions };
 
 /**
- * {@link compileRouteRules} options — {@link CompileRouteRulesOptions} plus the
- * whole-module-only `matcher` knob. The lower-level `compileFindRouteRules` /
- * `compileHandlersImport` entrypoints emit only their one fragment, so they take
- * the base options; `matcher` is meaningful only when assembling the full module.
+ * {@link compileRouteRules} options — base options plus the whole-module-only
+ * `matcher` knob (meaningless for the single-fragment entrypoints).
  */
 export interface CompileModuleOptions extends CompileRouteRulesOptions {
   /**
-   * Also emit a ready-to-use matcher export wrapping the compiled
-   * `findRouteRules`, so the generated module is directly usable without a
-   * hand-written `createMatcherFromFind` wrapper. See {@link MatcherExport}.
+   * Also emit a ready-to-use matcher export. See {@link MatcherExport}.
    * @default false
    */
   matcher?: MatcherExport;
 }
 
 /**
- * Compiled `findRouteRules` module, split into its two composable parts so a
- * caller can either take the whole module ({@link code}, or interpolate the
- * result as a string via `toString()`) or weave it into a larger module —
- * hoisting {@link imports} alongside its own and inlining {@link body} — without
- * re-parsing the source.
+ * Compiled `findRouteRules` module split into composable parts: take the
+ * whole module ({@link code}) or weave {@link imports}/{@link body} into a
+ * larger one without re-parsing.
  */
 export interface CompiledRouteRules {
   /**
-   * Handler import statements the generated code references — one per distinct
-   * source, in deterministic order (the {@link compileHandlersImport} output).
-   * Empty string for a data-only rule set that references no runtime handler.
-   * When a matcher export is requested ({@link CompileModuleOptions.matcher}),
-   * the `createMatcherFromFind` / `memoizeRouteRulesMatcher` import is appended.
+   * Handler import statements ({@link compileHandlersImport} output); empty
+   * for a data-only rule set. Includes the matcher infra import when one is
+   * requested.
    */
   imports: string;
   /**
-   * The `export const findRouteRules = …;` declaration on its own (no imports),
-   * followed by the `export const <name> = …;` matcher declaration when a
-   * matcher export is requested. References the handler bindings {@link imports}
-   * brings into scope.
+   * `findRouteRules` export declaration (no imports), plus the matcher
+   * declaration when requested. References bindings {@link imports} brings
+   * into scope.
    */
   body: string;
   /** The complete module source — {@link imports} then {@link body}. Same as `toString()`. */

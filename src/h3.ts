@@ -58,10 +58,9 @@ export function routeRules(
   config: Record<string, RouteRuleConfig>,
   opts?: RouteRulesOptions,
 ): Middleware {
-  // Memoization is composed here (not inside createRouteRulesMatcher — that
-  // constructor stays memoize-free so un-memoized bundles tree-shake the
-  // wrapper away; this module already imports the full core, so composing the
-  // wrapper here costs nothing for matcher-only consumers).
+  // Composed here (not in createRouteRulesMatcher, which stays memoize-free so
+  // matcher-only bundles can tree-shake the wrapper away) since this module
+  // already imports the full core.
   const memoize = opts?.memoize ?? true;
   const matcher = createRouteRulesMatcher(normalizeRouteRules(config), opts);
   const match = memoize

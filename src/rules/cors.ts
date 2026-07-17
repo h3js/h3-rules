@@ -4,22 +4,12 @@ import type { RuleHandler } from "../types.ts";
 
 let warnedCredentialsWildcard = false;
 
-// Post-merge defense for the `credentials: true` + wildcard-origin invariant.
-//
-// `normalizeRouteRules` rejects that pair per config key, but merge layers
-// least→most specific with a *shallow* option merge (`mergeRuleOptions`), so a
-// broad `{ credentials: true, origin: [...] }` narrowed by a more specific
-// `{ origin: "*" }` re-forms the forbidden combo *after* normalization, which
-// never re-runs. h3 would then emit `Access-Control-Allow-Origin: *` together
-// with `Access-Control-Allow-Credentials: true` — a response browsers reject.
-//
-// Neutralize it here (the one point that consumes merged CORS options), matching
-// h3's own `createOriginHeaders` wildcard condition exactly: `*` is emitted only
-// when `origin` is unset or the scalar `"*"`. Array allowlists never yield a
-// wildcard ACAO (h3 reflects specific origins), so a credentialed array origin
-// stays intact. Drop `credentials` rather than throw per-request: the result is
-// a valid public (non-credentialed) CORS response instead of a browser-rejected
-// invalid one.
+// Post-merge defense for `credentials: true` + wildcard origin: normalize-time
+// validation can't see combos formed by the shallow per-key merge across rule
+// layers (e.g. a broad `credentials: true` narrowed by `origin: "*"`). Mirrors
+// h3's own wildcard condition (unset or scalar `"*"`; array allowlists are fine)
+// and drops `credentials` rather than throwing, since browsers reject the
+// `Access-Control-Allow-Origin: *` + credentials pair anyway.
 function safeCorsOptions(options: CorsOptions): CorsOptions {
   const { origin, credentials } = options;
   if (credentials === true && (origin === undefined || origin === "*")) {
@@ -34,19 +24,13 @@ function safeCorsOptions(options: CorsOptions): CorsOptions {
   return options;
 }
 
-// CORS route rule — delegates to h3's `handleCors`.
+// order: -3, outer to `basicAuth` (-2): a CORS preflight (`OPTIONS` + `Origin` +
+// `Access-Control-Request-Method`) is answered directly, before auth — browsers
+// send preflights without credentials, and the response carries only policy
+// headers, no protected data. Do not reorder inside auth.
 //
-// Runs outermost (order: -3, outer to `basicAuth` at -2): a CORS *preflight*
-// (`OPTIONS` + `Origin` + `Access-Control-Request-Method`) is answered directly
-// with a 204 and the preflight policy headers, short-circuiting before auth,
-// redirect, proxy and cache. Browsers send preflights without credentials, so
-// gating them behind `basicAuth` would break CORS, and the preflight response
-// carries only policy headers (no protected data).
-//
-// For a normal request `handleCors` appends the CORS response headers (to both
-// `res` and `errHeaders`, so they survive an inner throw) and returns `false`,
-// and the chain continues. A user `headers` rule (order -1, `.set`) still wins
-// over any header CORS `.append`ed here.
+// For a normal request `handleCors` appends CORS headers and returns `false`;
+// a user `headers` rule (`.set`) still wins over these `.append`ed ones.
 export const cors: RuleHandler<"cors"> = {
   order: -3,
   handler: (m) =>

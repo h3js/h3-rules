@@ -3,10 +3,10 @@ import { mergeRuleOptions } from "../merge.ts";
 import type { RouteRuleEntry } from "../merge.ts";
 
 /**
- * Pre-merged registration data for one `(method, path)` pattern: the fully
- * resolved rule set of the pattern's subsumption chain (least → most specific,
- * `false` resets applied). At match time the most specific matched layer is the
- * complete merged result — no per-request layer merging.
+ * Pre-merged registration data for one `(method, path)` pattern: the resolved
+ * rule set of its subsumption chain (least → most specific, `false` resets
+ * applied). The most specific matched layer is the complete result at match
+ * time — no per-request merging.
  */
 export interface PreMergedRouteRules {
   /** The pattern this layer is registered at (params lookup key). */
@@ -16,9 +16,9 @@ export interface PreMergedRouteRules {
 
 export interface PreMergedRouteRuleEntry extends RouteRuleEntry {
   /**
-   * Patterns whose layers contributed to this rule (chain order), when they
-   * differ from `[route]`. Used to reproduce exact per-rule `params`: a rule's
-   * params merge from exactly the matched layers that carried it.
+   * Patterns whose layers contributed to this rule (chain order), when different
+   * from `[route]` — used to merge exact per-rule `params` from only the layers
+   * that carried the rule.
    */
   paramRoutes?: string[];
 }
@@ -28,16 +28,14 @@ interface ChainRule extends PreMergedRouteRuleEntry {
 }
 
 /**
- * Pre-merge grouped rule entries (output shape of the matcher's grouping:
- * `path → method → entries`) into per-`(method, path)` resolved layers.
+ * Pre-merge grouped rule entries (`path → method → entries`) into per-`(method,
+ * path)` resolved layers.
  *
- * Soundness requires the pattern set to be **chain-clean**: every overlapping
- * pattern pair must be strictly ordered by containment (rou3 `compareRoutes`).
- * Partially overlapping patterns (e.g. `/a/*​/c` vs `/a/b/*`) make "most
- * specific matched layer" ambiguous and throw. Method-scoped rules are
- * materialized as a `method × path` matrix so a method-scoped broad rule still
- * reaches narrower agnostic patterns via rou3's `methods[m] || methods[""]`
- * fallback.
+ * Requires the pattern set to be **chain-clean** — every overlapping pair strictly
+ * ordered by containment (rou3 `compareRoutes`); partial overlaps make "most
+ * specific layer" ambiguous and throw. Method-scoped rules are materialized as a
+ * `method × path` matrix so a broad method-scoped rule still reaches narrower
+ * agnostic patterns via rou3's `methods[m] || methods[""]` fallback.
  */
 export function preMergeRuleLayers(
   byPath: Map<string, Map<string, RouteRuleEntry[]>>,
@@ -86,34 +84,30 @@ export function preMergeRuleLayers(
 
   const result = new Map<string, Map<string, PreMergedRouteRules>>();
   for (const path of paths) {
-    // Containment is a strict total order within a chain, and it coincides
-    // with rou3's documented findAllRoutes layer order (least → most
-    // specific) — sort broad → narrow, self last.
+    // Containment is a strict total order in-chain, matching rou3's findAllRoutes
+    // layer order — sort broad → narrow, self last.
     const chain = [...subsumers.get(path)!]
       .sort((a, b) => (compareRoutes(a, b) === "superset" ? -1 : 1))
       .concat(path);
 
     const registrations = new Map<string, PreMergedRouteRules>();
     for (const method of ["", ...methodsUsed]) {
-      // A method-scoped registration is only needed when some chain member has
-      // rules for that method — otherwise rou3's `methods[""]` fallback already
-      // resolves to the identical agnostic chain.
+      // Only needed when some chain member has rules for this method — otherwise
+      // rou3's `methods[""]` fallback already resolves to the identical chain.
       if (method && !chain.some((route) => byPath.get(route)!.has(method))) {
         continue;
       }
       const merged = new Map<string, ChainRule>();
       for (const route of chain) {
         const methods = byPath.get(route)!;
-        // Same precedence as plain registration: agnostic entries first, then
-        // method-scoped entries of the same pattern override.
+        // Same precedence as plain registration: agnostic first, then method-scoped overrides.
         const agnostic = methods.get("") || [];
         const scoped = (method && methods.get(method)) || [];
         for (const entry of [...agnostic, ...scoped]) {
           mergeChainRule(merged, entry);
         }
       }
-      // Register even when the chain resolves to no rules — an all-`false`
-      // resolution is itself the (empty) result for paths matching this layer.
+      // Register even when empty — an all-`false` resolution is itself the result.
       registrations.set(method, {
         route: path,
         rules: [...merged.values()].map(({ paramRoutes, ...rule }) =>
@@ -128,8 +122,7 @@ export function preMergeRuleLayers(
   return result;
 }
 
-// Chain-time equivalent of the runtime `mergeRouteRule`, additionally tracking
-// which patterns contributed to each rule (for exact per-rule params).
+// Chain-time equivalent of `mergeRouteRule`, additionally tracking which patterns contributed (for exact per-rule params).
 function mergeChainRule(merged: Map<string, ChainRule>, entry: RouteRuleEntry): void {
   const current = merged.get(entry.name);
   if (current) {

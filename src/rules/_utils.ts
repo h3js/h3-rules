@@ -10,33 +10,26 @@ import type { ProxyRuleOptions, RedirectRuleOptions } from "../types.ts";
  */
 export type RuleTargetResolver = (event: H3Event) => string;
 
-// A *leading* run of one-or-more path separators in every form h3's
-// `resolveDotSegments` decodes to `/` (literal `/`/`\`, encoded `%2f`/`%5c` at
-// any `%25`-nesting depth — mirrors h3's `ENCODED_SEP_RE` and scope.ts's
-// `SEPARATOR_RUN_RE`). Used to collapse a base-less wildcard target's leading
-// separators so a `%2f`/`%5c`-decoding downstream cannot resolve it as a
-// protocol-relative `//host` URL.
+// Matches a leading run of path separators, in every form h3's
+// `resolveDotSegments` decodes to `/` — collapsed so a base-less wildcard
+// target can't be read downstream as a protocol-relative `//host` URL.
 const LEADING_SEPARATOR_RUN_RE = /^(?:[/\\]|%(?:25)*(?:2f|5c))+/i;
 
 /**
  * Prepare the target resolver for a `redirect`/`proxy` rule, or `undefined`
- * when the rule has no target. Everything derived solely from the rule's static
- * options (`to` / `base`) is computed here, once per handler closure; the
- * returned resolver performs only the request-dependent work (scope checks,
- * query forwarding).
+ * when the rule has no target. Static `to`/`base`-derived work happens once
+ * per handler closure; the returned resolver does only the request-dependent
+ * part (scope checks, query forwarding).
  *
- * For `/**` wildcard targets, the resolver forwards `event.url.pathname`:
- * encoded separators (`%2f`/`%5c`) stay opaque, so the target receives the
- * original separators and resolves the resource the client requested — like
- * nginx `proxy_pass $request_uri`, not the path-decoding `proxy_pass <uri>/`
- * form. The scope check canonicalizes (decodes `%2f`/`%5c`, resolves `..`) to
- * reject traversal that only surfaces once the downstream decodes those
- * separators.
+ * For `/**` wildcard targets, the resolver forwards `event.url.pathname`
+ * exactly as h3 served it (an encoded `%2f` stays opaque — like nginx
+ * `proxy_pass $request_uri`), and the scope check canonicalizes to reject
+ * traversal that only surfaces once a downstream decodes that separator.
  *
  * For non-wildcard targets, the raw request query string is forwarded with
- * full fidelity (duplicate keys, ordering, and percent-encoding preserved):
- * the target's own baked-in query params are kept first, and the request's
- * params are appended after them.
+ * full fidelity (no URLSearchParams round-trip, which would collapse
+ * duplicate keys and re-encode values); the target's own query params come
+ * first, the request's are appended after.
  */
 export function prepareRuleTarget(
   options: RedirectRuleOptions | ProxyRuleOptions | undefined,
@@ -49,8 +42,7 @@ export function prepareRuleTarget(
   if (target.endsWith("/**")) {
     const baseTarget = target.slice(0, -3);
     const base = options?.base;
-    // The target's own base path (`to` minus `/**`), used to scope-check the
-    // final forwarded target below.
+    // Target's own base path (`to` minus `/**`), used to scope-check the final forwarded target below.
     let baseTargetPath = parseURL(baseTarget).pathname;
     if (baseTargetPath.endsWith("/")) {
       baseTargetPath = baseTargetPath.slice(0, -1);
@@ -58,11 +50,9 @@ export function prepareRuleTarget(
     return (event) => {
       let targetPath = event.url.pathname + event.url.search;
       if (base) {
-        // The scope check canonicalizes; the forwarded path stays raw. When the
-        // raw path does not literally sit under `base` (encoded separator inside
-        // the base region, or a canonical-only match via dot segments), the base
-        // cannot be faithfully stripped from the raw path — fail closed instead
-        // of forwarding it unstripped.
+        // Fail closed if the raw path doesn't literally sit under `base` (e.g. an
+        // encoded separator or dot-segment makes it canonical-only under base) —
+        // it can't be faithfully stripped, so don't forward it unstripped.
         const rawPath = event.url.pathname;
         if (
           !isPathInScope(rawPath, base) ||
@@ -72,22 +62,14 @@ export function prepareRuleTarget(
         }
         targetPath = withoutBase(targetPath, base);
       } else {
-        // Collapse a *leading* run of separators in every form h3's
-        // `resolveDotSegments` decodes to `/` (literal `/`/`\`, encoded
-        // `%2f`/`%5c` at any `%25`-nesting) so a downstream that decodes them
-        // cannot read the forwarded base-less target as a protocol-relative
-        // `//host` URL. Interior separators stay opaque (forwarded verbatim) —
-        // only the leading position can leak. A plain single `/` is a no-op.
+        // Only the leading position can leak as a protocol-relative `//host` URL;
+        // interior separators stay opaque and are forwarded verbatim.
         targetPath = targetPath.replace(LEADING_SEPARATOR_RUN_RE, "/");
       }
       const resolved = joinURL(baseTarget, targetPath);
-      // Enforce scope on the *final* forwarded target, not just the incoming
-      // path. Repeated/leading slashes or `/./` segments can make the incoming
-      // path canonicalize inside `base` (an empty segment absorbing a `..`), yet
-      // once the base is stripped and the remainder rejoined — `joinURL`
-      // collapses those empty segments — the `..%2f` resolves outside the
-      // target's own base the moment a downstream decodes the separator. Checking
-      // the bytes we actually forward closes that pre-vs-post-join divergence.
+      // Re-check scope on the final joined target, not just the incoming path:
+      // joinURL collapses empty segments that may have shielded a `..` pre-join,
+      // so a `..%2f` can still escape the target's own base post-join.
       if (!isPathInScope(parseURL(resolved).pathname, baseTargetPath)) {
         throw new HTTPError({ status: 400 });
       }
@@ -95,10 +77,7 @@ export function prepareRuleTarget(
     };
   }
 
-  // Non-wildcard target: append the raw request search string (never an
-  // object round-trip through URLSearchParams, which would collapse duplicate
-  // keys and re-encode values). Split a `#fragment` off the static target so
-  // appended params land in the query, not the fragment.
+  // Split off any `#fragment` so appended query params land before it, not inside it.
   const hashIndex = target.indexOf("#");
   const targetBase = hashIndex === -1 ? target : target.slice(0, hashIndex);
   const targetHash = hashIndex === -1 ? "" : target.slice(hashIndex);

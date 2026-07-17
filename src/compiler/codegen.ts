@@ -19,9 +19,8 @@ export function serializePreMergedRouteRules(
 
 /**
  * Serialize the rule entries registered for one pattern (one rou3 layer's
- * `.data`) — equivalent to Nitro's `serializeRouteRule()`. Options must be
- * JSON-serializable in compiled mode; anything JSON cannot round-trip throws
- * (see `assertSerializableOptions`).
+ * `.data`). Options must be JSON-serializable; anything JSON cannot
+ * round-trip throws (see `assertSerializableOptions`).
  */
 export function serializeRouteRuleEntries(
   entries: (RouteRuleEntry & { paramRoutes?: string[] })[],
@@ -54,11 +53,9 @@ export function serializeRouteRuleEntries(
 const DEFAULT_MATCHER_EXPORT_NAME = "matcher";
 
 /**
- * Resolve the `matcher` option into the infra import + export-declaration source
- * for the ready-to-use matcher export, or `null` when none is requested.
- * `createMatcherFromFind` (and `memoizeRouteRulesMatcher`, only when memoizing)
- * are imported from `h3-rules`; the export wraps the `findRouteRules` binding the
- * surrounding module declares.
+ * Resolve `matcher` into the infra import + export-declaration source, or
+ * `null` if none requested. Wraps the `findRouteRules` binding the module
+ * declares.
  */
 export function compileMatcherExport(
   matcher: MatcherExport | undefined,
@@ -69,19 +66,15 @@ export function compileMatcherExport(
   }
   const spec = typeof matcher === "string" ? { name: matcher } : matcher === true ? {} : matcher;
   const name = spec.name || DEFAULT_MATCHER_EXPORT_NAME;
-  // The export binds as a top-level identifier in generated code — reject a
-  // non-identifier here rather than as a parse error in the consumer's module.
+  // Reject a non-identifier here, not as a parse error in the consumer's module.
   assertHandlerBinding(name, "matcher export name");
   const { memoize } = spec;
-  // Pass the baked override predicate as the 2nd argument so the ready-to-use
-  // compiled matcher applies the same specificity guard as the runtime
-  // `createRouteRulesMatcher` — a broader canonical/merged pattern can never
-  // downgrade a narrower rule the served path resolved (see
-  // {@link compileOverridePredicate}).
+  // Baked override predicate gives the compiled matcher the same specificity
+  // guard as runtime `createRouteRulesMatcher` (see compileOverridePredicate).
   let expr = `createMatcherFromFind(findRouteRules, ${overridePredicate})`;
   if (memoize) {
-    // A `{ max }` cap serializes as a second argument; bare `true`/`{}` uses the
-    // default cap (no argument), matching memoizeRouteRulesMatcher's default.
+    // `{ max }` serializes as a 2nd arg; bare true/{} omits it (matches
+    // memoizeRouteRulesMatcher's default).
     const max = memoize === true ? undefined : memoize.max;
     expr =
       max === undefined
@@ -97,26 +90,19 @@ export function compileMatcherExport(
 }
 
 /**
- * Emit the source of the dual-path override predicate the compiled `matcher`
- * export passes to `createMatcherFromFind` — the compiled counterpart of the
- * runtime `canOverrideRoute` guard. It answers, for two matched pattern strings,
- * whether the incoming (canonical / slash-merged) reading may override an
- * already-resolved rule of the same name: only when its pattern is equal to, or
- * strictly more specific than, the current one — so a broader canonical pattern
- * can never downgrade a narrower rule the served path resolved.
+ * Emit the dual-path override predicate passed to `createMatcherFromFind` —
+ * the compiled counterpart of the runtime `canOverrideRoute` guard: incoming
+ * may override an already-resolved rule of the same name only if its pattern
+ * is equal to, or strictly more specific than, the current one.
  *
- * The rou3 containment relation is baked into a static table **at build time**
- * (`compareRoutes` runs here, never in the emitted output), so the compiled
- * matcher keeps rou3 out of the runtime bundle. `routes` is the set of registered
- * pattern strings — the only values that can reach the predicate as a matched
- * entry's `route`. Sorted for deterministic (byte-stable) output.
+ * `compareRoutes` runs here at build time (never in the emitted output),
+ * baking the containment relation into a static table so rou3 stays out of
+ * the runtime bundle. `routes` are the registered pattern strings, sorted for
+ * deterministic output.
  */
 export function compileOverridePredicate(routes: string[]): string {
-  // Ordered pairs `current → [incoming, …]` where `incoming` may override
-  // `current`: `compareRoutes(current, incoming)` is `"superset"` (current
-  // broader) or `"equal"`. Identical routes are handled by the emitted `a === b`
-  // fast path; every other relation (`subset`/`disjoint`/`partial`) is absent
-  // from the table, so the predicate fails closed and keeps the served rule.
+  // current → incoming allowed when compareRoutes is "superset" or "equal";
+  // everything else is absent from the table, so the predicate fails closed.
   const sorted = [...routes].sort();
   const allowed = new Map<string, string[]>();
   for (const current of sorted) {
@@ -134,8 +120,7 @@ export function compileOverridePredicate(routes: string[]): string {
       }
     }
   }
-  // No overlapping registered patterns: only an identical route may override
-  // (exactly the runtime guard's behavior), so a bare identity check suffices.
+  // No overlaps: only identical routes may override, so identity check suffices.
   if (allowed.size === 0) {
     return "(a, b) => a === b";
   }
@@ -146,11 +131,8 @@ export function compileOverridePredicate(routes: string[]): string {
 }
 
 /**
- * Handler references bind as `<ns>$<name>` identifiers in generated code; a
- * non-identifier would otherwise surface as a parse error in the consumer's
- * generated module, far from the misconfiguration. Used to validate every
- * binding name the compiler emits (`runtimeRules` keys, per-rule `export`
- * names, `handlersImportName`, and the matcher export name).
+ * Validates every binding name the compiler emits — a non-identifier would
+ * otherwise surface as a parse error in the consumer's generated module.
  */
 export function assertHandlerBinding(name: string, what: string): void {
   if (!JS_IDENTIFIER_RE.test(name)) {
@@ -164,10 +146,9 @@ export function assertHandlerBinding(name: string, what: string): void {
 
 const JS_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/;
 
-// `JSON.stringify` silently drops functions and nested `undefined` and mangles
-// class instances (`Date` → string, `RegExp` → `{}`), which would make the
-// compiled matcher diverge from the runtime matcher with no error. Reject
-// anything JSON cannot round-trip at compile time instead.
+// `JSON.stringify` silently drops functions/undefined and mangles class
+// instances (Date→string, RegExp→{}) — diverging compiled from runtime matcher
+// with no error. Reject anything JSON cannot round-trip instead.
 function assertSerializableOptions(value: unknown, entry: RouteRuleEntry, path: string): void {
   if (
     value === null ||
@@ -186,13 +167,10 @@ function assertSerializableOptions(value: unknown, entry: RouteRuleEntry, path: 
   const proto = typeof value === "object" ? Object.getPrototypeOf(value) : undefined;
   if (proto === Object.prototype || proto === null) {
     for (const [key, item] of Object.entries(value as object)) {
-      // `JSON.stringify` emits an own enumerable `__proto__` as a `"__proto__"`
-      // member, but the compiler embeds that JSON as a JS **object literal**, where
-      // a `"__proto__"` key is the prototype-setter production (ECMA-262
-      // `__proto__` PropertyDefinition) — not a data property. So the compiled
-      // object would silently drop the key and adopt a new prototype, diverging
-      // from the runtime matcher (which carries it as data). This is the one place
-      // JSON and JS-literal semantics disagree; refuse it rather than diverge.
+      // A `__proto__` key in a JS object literal is the prototype-setter
+      // production (ECMA-262), not a data property — it would silently retarget
+      // the object's prototype instead of round-tripping, diverging from the
+      // runtime matcher (which carries it as data).
       if (key === "__proto__") {
         throw new Error(
           `[h3-rules] compiler: \`${entry.name}\` rule for \`${entry.route}\` has a \`__proto__\` key at \`${path}\` — it cannot be embedded as a JS object literal without changing the object's prototype (its JSON.stringify output would diverge from the runtime matcher); rename or remove it`,

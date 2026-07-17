@@ -1,13 +1,11 @@
-// Everything exported here must stay tree-shakeable — incl. via namespace
-// member access (`import * as rules from "h3-rules"; rules.xyz`): no
-// module-level side effects, `/* @__PURE__ */` on module-scope instantiations.
-// Pinned by test/treeshake.test.ts.
+// Every export must stay tree-shakeable, including namespace member access
+// (`import * as rules from "h3-rules"; rules.xyz`): no module-level side
+// effects, `/* @__PURE__ */` on module-scope instantiations. Pinned by
+// test/treeshake.test.ts.
 
-// h3 middleware (headline API)
 export { routeRules } from "./h3.ts";
 export type { RouteRulesOptions } from "./h3.ts";
 
-// Runtime matcher
 export {
   createRouteRulesMatcher,
   createMatcherFromFind,
@@ -21,27 +19,22 @@ export type {
   FindRouteRules,
 } from "./match.ts";
 
-// Normalization
 export { normalizeRouteRules } from "./normalize.ts";
 
-// Merge algorithm (pure)
 export { mergeMatchedRouteRules } from "./merge.ts";
 export type { RouteRuleEntry, RouteRuleLayer } from "./merge.ts";
 
-// Rule handlers
 export { ruleHandlers } from "./rules/index.ts";
 export { headers } from "./rules/headers.ts";
 export { redirect } from "./rules/redirect.ts";
 export { basicAuth } from "./rules/basic-auth.ts";
 export { cors } from "./rules/cors.ts";
-// The `proxy` handler lives in the `h3-rules/proxy` subpath (opt-in, so h3's
-// `proxyRequest` stays out of bundles that don't proxy). The ocache-backed
-// `cache` handler lives in the `h3-rules/cache` subpath; this factory builds one
-// from an injected `defineCachedHandler`.
+// `proxy`/`cache` handlers are opt-in subpaths (h3-rules/proxy, h3-rules/cache)
+// so proxyRequest/ocache stay out of bundles that don't use them; this factory
+// builds a cache handler from an injected `defineCachedHandler`.
 export { createCacheRuleHandler } from "./rules/cache.ts";
 export type { CacheRuleHandlerOptions, DefineCachedHandler } from "./rules/cache.ts";
 
-// Types
 export type {
   RouteRuleConfig,
   RouteRules,

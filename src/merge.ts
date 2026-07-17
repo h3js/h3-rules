@@ -2,12 +2,11 @@ import type { PreMergedRouteRules } from "./internal/premerge.ts";
 import type { MatchedRouteRule, MatchedRouteRules } from "./types.ts";
 
 /**
- * Whether an alternate (canonical / slash-merged) reading's rule may override an
- * already-resolved rule of the same name: `true` only when the incoming rule's
- * matched pattern is equal to, or strictly more specific than, the current one.
- * Injected (not imported) so `merge.ts` stays free of `rou3` and compiled
- * matchers that don't wire it remain tree-shakeable. When omitted the union keeps
- * its historical unconditional-override behavior.
+ * Whether an alternate (canonical / slash-merged) reading may override an
+ * already-resolved rule of the same name: true only when the incoming pattern
+ * is equal to, or strictly more specific than, the current one. Injected (not
+ * imported) so `merge.ts` stays `rou3`-free and tree-shakeable; omitted keeps
+ * the historical unconditional-override behavior.
  */
 export type RouteOverridePredicate = (currentRoute: string, incomingRoute: string) => boolean;
 
@@ -35,22 +34,14 @@ export interface RouteRuleLayer {
 }
 
 /**
- * Multi-path merge + union. Resolve the raw (served) path and, if provided, the
- * canonical (decoded) path and the slash-merged canonical path independently — so
- * a rule's `false` reset only affects the path it is configured for — then union
- * in order: each later pass can **add or override, never delete**, a rule an
- * earlier path resolved. On overlap the later (more decoded) rule wins **only when
- * `canOverride` allows it** — its pattern must be equal to, or more specific than,
- * the current one — so a narrower canonical gate wins but a broader canonical
- * pattern can never downgrade a narrower rule the served path resolved (see
- * {@link unionLayers}). Omitting `canOverride` keeps the historical unconditional
- * override. The merged-canonical pass mirrors the second interpretation
- * `isPathInScope` uses: it recovers a narrower gate on the path a slash-merging
- * downstream would resolve (a `..` next to an encoded separator whose empty
- * segment h3's canonical form otherwise keeps).
+ * Multi-path merge + union: resolve the raw, canonical, and slash-merged
+ * canonical paths independently (so a `false` reset stays local to its path),
+ * then union in order — each later pass may **add or override, never delete**
+ * a rule an earlier path resolved, and only overrides when `canOverride` allows
+ * it (see {@link unionLayers}). Omitting `canOverride` keeps the historical
+ * unconditional override.
  *
- * Pure: the caller supplies already-matched layers (least → most specific) and the
- * (pure) `canOverride` specificity predicate.
+ * Pure: the caller supplies already-matched layers (least → most specific).
  */
 export function mergeMatchedRouteRules(
   rawLayers: RouteRuleLayer[] | undefined,
@@ -64,22 +55,17 @@ export function mergeMatchedRouteRules(
   return routeRules;
 }
 
-// Union one alternate reading's resolved rules onto the accumulated set. Each
-// reading is resolved on its own (so its `false` resets stay local), then merged
-// in — add or override only, since a resolved set never carries a `false` option.
+// Union one alternate reading's resolved rules onto the accumulated set (each
+// reading resolved on its own so its `false` resets stay local).
 //
-// Security: a later (more decoded) pass may **add** a rule the served path missed,
-// but may **override** one it already resolved *only when `canOverride` allows it*
-// — i.e. the incoming pattern is equal to, or strictly more specific than, the
-// current one (the narrower canonical gate winning — e.g. `/app/admin/**` auth over
-// a broad `/app/**` rule for `/app/admin%2fpanel`). It must NOT let a *broader*
-// canonical pattern override a narrower rule the served (raw) path already
-// resolved: a crafted encoded-dot path can canonicalize *up* to a broad pattern
-// (`/app/admin/x/%2e%2e/%2e%2e/%2e%2e/y` → `/y`), and letting that broad rule win
-// would downgrade the strict gate the served admin path actually hits. When the
-// two patterns are not orderable by containment (`disjoint`/`partial`), `canOverride`
-// fails closed and keeps the served path's rule. Callers that don't inject a
-// predicate keep the historical unconditional-override behavior.
+// Security: a later pass may **add** a rule the served path missed, but may
+// **override** one only when `canOverride` allows it — the incoming pattern
+// must be equal to, or strictly more specific than, the current one. This stops
+// a broader canonical pattern (reachable via a crafted `%2e%2e` path that
+// canonicalizes *up*) from downgrading a narrower rule (e.g. an auth gate) the
+// served path already resolved. Not orderable (`disjoint`/`partial`) fails
+// closed and keeps the served path's rule; omitting `canOverride` keeps the
+// historical unconditional override.
 function unionLayers(
   routeRules: MatchedRouteRules,
   layers: RouteRuleLayer[] | undefined,
@@ -98,9 +84,8 @@ function unionLayers(
   }
 }
 
-// Resolve the matched layers (least → most specific) of a single path into a
-// set of route rules. Resolving each path (raw / canonical) with its own call
-// keeps a `false` reset from leaking across paths.
+// Resolve one path's matched layers (least → most specific); called per path
+// so a `false` reset doesn't leak across paths.
 function resolveLayers(layers: RouteRuleLayer[] | undefined): MatchedRouteRules {
   const lastData = layers?.[layers.length - 1]?.data;
   if (lastData && !Array.isArray(lastData)) {
@@ -115,33 +100,27 @@ function resolveLayers(layers: RouteRuleLayer[] | undefined): MatchedRouteRules 
   return routeRules;
 }
 
-// `typeof null === "object"`: without this guard a more specific `null` option
-// would spread-merge into an inherited object (keeping it) instead of
-// overriding it. Shared with the build-time chain merge (premerge).
+// `typeof null === "object"` — without this guard a `null` option would
+// spread-merge into (not override) an inherited object. Shared with premerge.
 export function isMergeableObject(value: unknown): value is object {
   return value !== null && typeof value === "object";
 }
 
-// The accumulator every path resolves into is keyed by **rule name**, which is
-// attacker-influenceable config (rule names become property keys). A null
-// prototype makes a name like `__proto__`/`constructor`/`prototype` a plain own
-// key: without it `routeRules["__proto__"]` reads the inherited `Object.prototype`
-// getter (truthy), so `mergeRouteRule` would take the update branch and assign
-// `currentRule.options`/`route`/`method` **directly onto `Object.prototype`** —
-// a process-wide prototype-pollution DoS. `Object.values`/`entries`/`keys`
-// (used downstream) all work on null-proto objects.
+// Rule names are attacker-influenceable config (they become property keys). A
+// null prototype keeps `__proto__`/`constructor`/`prototype` plain own keys —
+// otherwise `routeRules["__proto__"]` reads the inherited `Object.prototype`
+// getter (truthy) and `mergeRouteRule`'s update branch would assign directly
+// onto `Object.prototype` — a process-wide prototype-pollution DoS.
 function emptyRouteRules(): MatchedRouteRules {
   return Object.create(null) as MatchedRouteRules;
 }
 
 // THE core option-merge rule, shared by every merge site (runtime layer merge
 // below, build-time chain pre-merge in `src/internal/premerge.ts`, and the
-// canonical-key collision merge in `src/normalize.ts`): two object options
-// shallow-merge with the incoming (more specific / later) keys winning;
-// anything else — non-objects, `null`, arrays-in-objects as leaf values —
-// overrides wholesale. The `false`-delete branch stays local to each caller
-// (their rule containers differ: record vs `Map`). Internal: not re-exported
-// from `src/index.ts`.
+// canonical-key collision merge in `src/normalize.ts`): objects shallow-merge
+// with incoming keys winning; everything else overrides wholesale. The
+// `false`-delete branch stays local to each caller. Not re-exported from
+// `src/index.ts`.
 export function mergeRuleOptions(current: unknown, incoming: unknown): unknown {
   return isMergeableObject(current) && isMergeableObject(incoming)
     ? { ...current, ...incoming }
@@ -152,10 +131,9 @@ export function mergeRuleOptions(current: unknown, incoming: unknown): unknown {
 // Internal
 // ------------------------------------------------------------------------
 
-// preMerge mode: the most specific matched layer already carries the fully
-// merged chain result — only per-rule params (path-dependent) are attached
-// here, merged from exactly the layers whose pattern contributed to the rule
-// (same result as the per-request merge, without the merge).
+// preMerge mode: the matched layer already carries the merged chain result;
+// only attach per-rule params here, merged from exactly the layers whose
+// pattern contributed to that rule (`paramRoutes`).
 function resolvePreMergedLayers(
   layers: RouteRuleLayer[],
   lastData: PreMergedRouteRules,
@@ -171,8 +149,7 @@ function resolvePreMergedLayers(
       }
       const layerRoute = (layer.data as PreMergedRouteRules).route;
       if (paramRoutes ? paramRoutes.includes(layerRoute) : layerRoute === entry.route) {
-        // rou3 creates fresh params objects per lookup — safe to use directly
-        // for a single contributor.
+        // rou3 gives fresh params per lookup — safe to reuse directly for a single contributor.
         params = params ? { ...params, ...layerParams } : layerParams;
       }
     }
@@ -188,10 +165,9 @@ function resolvePreMergedLayers(
   return routeRules;
 }
 
-// Apply one rule (a matched layer entry or a resolved rule from the other path)
-// onto the accumulated set. `false` resets an inherited rule; otherwise options
-// are merged (objects) or overridden, with the incoming — more specific or later
-// — rule winning. `route`/`params` always take the more specific match's values.
+// Apply one rule onto the accumulated set: `false` resets an inherited rule;
+// otherwise options merge/override with the incoming (more specific/later)
+// rule winning, and `route`/`params` always take the more specific match.
 function mergeRouteRule(
   routeRules: MatchedRouteRules,
   rule: RouteRuleEntry | MatchedRouteRule,
@@ -201,13 +177,10 @@ function mergeRouteRule(
   const currentRule = routeRules[name];
   if (currentRule) {
     if (rule.options === false) {
-      // Remove/reset existing rule with `false` value
       delete routeRules[name];
       return;
     }
-    // Merge nested rule objects, override non-objects
     currentRule.options = mergeRuleOptions(currentRule.options, rule.options) as never;
-    // Routing (route and params)
     currentRule.route = rule.route;
     currentRule.method = rule.method;
     if (currentRule.params || params) {

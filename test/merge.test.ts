@@ -316,6 +316,14 @@ describe("dual-path union (Nitro #4396)", () => {
     // downstream that decodes `%2f` then merges slashes resolves it to
     // `/api/admin/secret`. The matcher must also match the slash-merged canonical
     // reading (`/api/admin/secret`), like `isPathInScope` already does for scope.
+    //
+    // Payloads below are pre-h3 wire forms fed straight to the matcher. Through
+    // real h3 the `%2e%2e` is decoded and resolved first, so e.g.
+    // `/api/foo/%2e%2e/%2fadmin/secret` arrives as `/api/%2fadmin/secret` — which
+    // reaches the same canonical (`/api//admin/secret`) and slash-merged
+    // (`/api/admin/secret`) readings, so the invariant and these assertions hold
+    // either way. `%2f` is the only part of these payloads h3 leaves opaque, and
+    // it is the part that makes the bypass real; see `test/h3-decode.test.ts`.
     const match = matcher({
       "/api/**": { headers: { "x-app": "1" } },
       "/api/admin/**": { basicAuth: { username: "admin", password: "secret" } },
@@ -359,12 +367,18 @@ describe("dual-path union (Nitro #4396)", () => {
     // The mutation-tight strip case: unlike an ancestor `false` (which deletes
     // within its own reading before the union, so it can't test cross-reading
     // leakage), a *sibling* `false` is matched ONLY by the crafted canonical
-    // reading — no co-matching protector deletes it first. Raw
-    // `/app/admin/%2e%2e/public/x` is served by h3 under `/app/admin/**` (the
-    // encoded `..` stays opaque in dispatch), while its canonical reading
-    // `/app/public/x` matches only the `basicAuth: false` sibling. The union
-    // must NOT let that sibling `false` delete the admin gate the served handler
-    // runs behind.
+    // reading — no co-matching protector deletes it first. `/app/admin/**`
+    // matches the payload as given, while its canonical reading `/app/public/x`
+    // matches only the `basicAuth: false` sibling. The union must NOT let that
+    // sibling `false` delete the admin gate.
+    //
+    // SYNTHETIC INPUT — defense-in-depth for non-h3 callers of the exported
+    // matchers (compiled matchers, other frameworks), NOT h3 traffic. h3 decodes
+    // `%2e` and resolves the dots *before* dispatch (see `test/h3-decode.test.ts`),
+    // so a real h3 request for `/app/admin/%2e%2e/public/x` reaches the matcher as
+    // `/app/public/x` and is legitimately served under the `false` sibling — the
+    // encoded `..` does NOT stay opaque in dispatch. Feeding the pre-decode wire
+    // form directly is what makes the `%2e` climb testable at all here.
     const match = matcher({
       "/app/admin/**": {
         basicAuth: { username: "admin", password: "s3cret", realm: "Admin" },

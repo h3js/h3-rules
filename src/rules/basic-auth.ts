@@ -2,10 +2,7 @@ import { requireBasicAuth } from "h3";
 import type { BasicAuthOptions } from "h3";
 import type { RuleHandler } from "../types.ts";
 
-// basicAuth route rule
-// Runs first (order: -2, outer to `headers` at -1 and everything else at 0) so
-// unauthorized requests are neither redirected/proxied/cached nor carry
-// `headers` — on auth failure it throws before any inner rule runs.
+// order: -2, outer to `headers`/`redirect`/`proxy`/`cache` — auth failure throws before any of them run.
 export const basicAuth: RuleHandler<"basicAuth"> = {
   order: -2,
   handler: (m) =>

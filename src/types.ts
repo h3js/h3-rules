@@ -4,17 +4,11 @@ import type { BasicAuthOptions, CorsOptions, Middleware, ProxyOptions } from "h3
 export type HTTPStatus = number;
 
 /**
- * `cache` rule options — the declarative caching schema owned by `h3-rules`.
- *
- * This is intentionally **not** imported from ocache: the core package has no
- * ocache dependency (the ocache-backed handler lives in `h3-rules/cache`), and
- * the rule schema must mean the same thing under any injected
- * `defineCachedHandler` implementation. Every field is a (JSON-serializable)
- * subset of ocache's `CachedEventHandlerOptions`, structurally compatible by
- * a type-level test — implementation hooks (`getKey`, `shouldCache`,
- * `getMaxAge`, …) are deliberately excluded: supply those through the cache
- * handler factory's `defaults` (fully typed against ocache in `h3-rules/cache`)
- * or augment this interface (see the README "Extending rule types" section).
+ * `cache` rule options — declarative caching schema owned by `h3-rules`, not
+ * ocache: core has no ocache dependency (structurally compatible with ocache's
+ * `CachedEventHandlerOptions`, pinned by a type-level test), and implementation
+ * hooks (`getKey`, `shouldCache`, …) are excluded — supply those via the cache
+ * handler factory's `defaults`, or augment this interface (README "Extending rule types").
  */
 export interface CacheRuleOptions {
   /** Cache name, part of the cache key. Defaults to `<rulePattern>:<matchedRoute>`. */
@@ -48,13 +42,9 @@ export interface CacheRuleOptions {
 /**
  * Route rule options as authored by the user (input to {@link normalizeRouteRules}).
  *
- * This is a **closed interface**: only the keys declared here type-check, so a
- * typo like `redirct` or `header` is a compile error. Custom / data-only rules
- * must be declared via module augmentation — the same mechanism consumers
- * (e.g. Nitro) use to re-add their own keys (`isr`, `prerender`, `static`, …)
- * with full typing via interface merging. Data-only keys still pass through
- * normalization untouched at runtime; augmentation only re-opens the *typing*.
- * See the README "Extending rule types" section.
+ * Closed interface — unknown keys are compile errors (catches typos like `redirct`).
+ * Custom/data-only keys need module augmentation (README "Extending rule types");
+ * they still flow through normalization untouched at runtime.
  *
  * @example
  * ```ts
@@ -67,47 +57,35 @@ export interface CacheRuleOptions {
  */
 export interface RouteRuleConfig {
   /**
-   * Enable runtime caching. When set to an options object, the matched route
-   * handler is wrapped with a cached handler. Set to `false` to disable caching
-   * inherited from a less-specific pattern.
-   *
-   * Requires a registered `cache` rule handler: the ocache-backed one from
-   * `h3-rules/cache`, or your own via `createCacheRuleHandler`.
+   * Enable runtime caching; `false` disables caching inherited from a less-specific
+   * pattern. Requires a registered `cache` handler (`h3-rules/cache`'s ocache-backed
+   * one, or your own via `createCacheRuleHandler`).
    */
   cache?: CacheRuleOptions | false;
 
-  /** Response headers to set for matching routes. */
   headers?: Record<string, string>;
 
   /**
-   * Server-side redirect. A plain string defaults to status `307`. Use an object
-   * to specify a custom status. When the rule key ends with `/**` and `to` also
-   * ends with `/**`, the matched path tail is appended to the destination. Set to
-   * `false` to disable a redirect inherited from a less-specific pattern.
+   * Server-side redirect; a plain string defaults to status `307`. When the rule
+   * key and `to` both end in `/**`, the matched tail is appended to the destination.
+   * `false` disables a redirect inherited from a less-specific pattern.
    */
   redirect?: string | { to: string; status?: HTTPStatus } | false;
 
   /**
-   * Proxy matching requests to another origin or internal path. A plain string
-   * specifies the destination. Use an object for additional H3 {@link ProxyOptions}.
-   * Wildcard `/**` tail behavior works the same as {@link redirect}. Set to
-   * `false` to disable a proxy inherited from a less-specific pattern.
+   * Proxy to another origin or internal path; a plain string is the destination,
+   * or use an object for {@link ProxyOptions}. Wildcard `/**` tail behavior matches
+   * {@link redirect}. `false` disables a proxy inherited from a less-specific pattern.
    */
   proxy?: string | ({ to: string } & ProxyOptions) | false;
 
-  /**
-   * Protect matching routes with HTTP Basic Authentication. Set to `false` to
-   * disable auth inherited from a less-specific pattern.
-   */
+  /** HTTP Basic Auth; `false` disables auth inherited from a less-specific pattern. */
   basicAuth?: Pick<BasicAuthOptions, "password" | "username" | "realm"> | false;
 
   /**
-   * Handle CORS for matching routes via h3's `handleCors`. `true` applies
-   * permissive defaults (origin/methods/allowHeaders `*`); an object is passed
-   * through as h3 {@link CorsOptions} (origin allowlist, `credentials`,
-   * `maxAge`, …). A CORS preflight is answered directly (204) before any other
-   * rule — including `basicAuth`. Set to `false` to disable CORS inherited from
-   * a less-specific pattern.
+   * CORS via h3's `handleCors`; `true` applies permissive defaults (`*`), or pass
+   * {@link CorsOptions}. A preflight is answered (204) before any other rule,
+   * including `basicAuth`. `false` disables CORS inherited from a less-specific pattern.
    */
   cors?: CorsOptions | boolean;
 
@@ -125,11 +103,9 @@ export interface RouteRuleConfig {
 /**
  * Normalized route rules used at runtime after shortcut resolution.
  *
- * Unlike {@link RouteRuleConfig}, this stays an **open interface** (retains its
- * `[key: string]: unknown` index signature): the matcher/merge runtime handles
- * arbitrary rule names, and a matched result (`event.context.routeRules`) may
- * carry augmented keys. Augment it alongside `RouteRuleConfig` to type custom
- * rules end to end (see the README "Extending rule types" section).
+ * Unlike {@link RouteRuleConfig}, stays **open** (`[key: string]: unknown`) — the
+ * runtime handles arbitrary rule names; augment alongside `RouteRuleConfig` for
+ * custom rules (README "Extending rule types").
  */
 export interface RouteRules {
   headers?: Record<string, string>;
@@ -146,10 +122,9 @@ export interface RedirectRuleOptions {
   to: string;
   status: HTTPStatus;
   /**
-   * Scope base for a `/**` rule key (the key minus the `/**` suffix; the matcher
-   * `baseURL` is prefixed at registration). When set, the runtime validates the
-   * request path is within scope before stripping this base. First-class
-   * replacement for Nitro's internal `_redirectStripBase` flag.
+   * Scope base for a `/**` rule key (key minus the `/**` suffix; matcher `baseURL`
+   * is prefixed at registration). Runtime validates in-scope before stripping.
+   * Replaces Nitro's internal `_redirectStripBase`.
    */
   base?: string;
 }
@@ -158,9 +133,8 @@ export interface RedirectRuleOptions {
 export type ProxyRuleOptions = {
   to: string;
   /**
-   * Scope base for a `/**` rule key (the key minus the `/**` suffix; the matcher
-   * `baseURL` is prefixed at registration). See {@link RedirectRuleOptions.base}.
-   * First-class replacement for Nitro's internal `_proxyStripBase` flag.
+   * Scope base for a `/**` rule key. See {@link RedirectRuleOptions.base}; replaces
+   * Nitro's internal `_proxyStripBase`.
    */
   base?: string;
 } & ProxyOptions;
@@ -195,18 +169,14 @@ export type MatchedRouteRules = {
 };
 
 /**
- * A rule handler: `handler` constructs an H3 {@link Middleware} from a matched
- * rule, and the optional `order` controls execution order relative to other
- * rules — lower runs first; the default (when omitted) is `0`.
+ * A rule handler: `handler` builds an H3 {@link Middleware}; `order` controls
+ * execution order (lower runs first, default `0`).
  *
- * The built-in handlers occupy the negative band, outermost first:
- * - `cors`: `-3` (answers preflights before the auth gate)
+ * Built-ins occupy the negative band, outermost first:
+ * - `cors`: `-3` (preflight before the auth gate)
  * - `basicAuth`: `-2` (gates before headers/cache/redirect/proxy)
- * - `headers`: `-1` (applies over inner responses)
- * - everything else (`cache`, `redirect`, `proxy`, custom): `0`
- *
- * Pick a number relative to these bands — e.g. `-4` runs outside `cors`,
- * `-1.5` between `basicAuth` and `headers`, `1` after all built-ins.
+ * - `headers`: `-1`
+ * - everything else: `0`
  */
 export interface RuleHandler<K extends RouteRuleName = RouteRuleName> {
   order?: number;
