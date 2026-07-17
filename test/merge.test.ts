@@ -355,6 +355,90 @@ describe("dual-path union (Nitro #4396)", () => {
     expect(routeRules.basicAuth!.options).toMatchObject({ realm: "Broad" });
   });
 
+  it("a SIBLING-scope `false` reading never strips a gate the served (raw) path resolved", () => {
+    // The mutation-tight strip case: unlike an ancestor `false` (which deletes
+    // within its own reading before the union, so it can't test cross-reading
+    // leakage), a *sibling* `false` is matched ONLY by the crafted canonical
+    // reading — no co-matching protector deletes it first. Raw
+    // `/app/admin/%2e%2e/public/x` is served by h3 under `/app/admin/**` (the
+    // encoded `..` stays opaque in dispatch), while its canonical reading
+    // `/app/public/x` matches only the `basicAuth: false` sibling. The union
+    // must NOT let that sibling `false` delete the admin gate the served handler
+    // runs behind.
+    const match = matcher({
+      "/app/admin/**": {
+        basicAuth: { username: "admin", password: "s3cret", realm: "Admin" },
+      },
+      "/app/public/**": { basicAuth: false },
+    });
+    for (const payload of [
+      "/app/admin/%2e%2e/public/x", // encoded `..` climbs to the sibling
+      "/app/admin/%252e%252e/public/x", // double-encoded `..`
+      "/app/admin/x/%2e%2e/%2e%2e/public/y", // deeper climb
+    ]) {
+      const { routeRules } = match("GET", payload);
+      expect(routeRules.basicAuth?.options, payload).toMatchObject({ username: "admin" });
+    }
+    // Control: a request genuinely served under the sibling is disabled.
+    expect(match("GET", "/app/public/x").routeRules.basicAuth).toBeUndefined();
+  });
+
+  it("a non-basicAuth disabling value (`cors: false`) also never leaks across readings", () => {
+    // The `false`-reset invariant is value-agnostic — the delete branch keys off
+    // `options === false`, not the rule name. A sibling `cors: false` reached only
+    // via a decoded reading must not strip the `cors` policy the served (raw) path
+    // resolved, exactly as with `basicAuth`.
+    const match = matcher({
+      "/app/api/**": { cors: { origin: ["https://trusted.example"] } },
+      "/app/open/**": { cors: false },
+    });
+    for (const payload of ["/app/api/%2e%2e/open/x", "/app/api/%252e%252e/open/x"]) {
+      const { routeRules } = match("GET", payload);
+      expect(routeRules.cors?.options, payload).toMatchObject({
+        origin: ["https://trusted.example"],
+      });
+    }
+    // Control: genuinely served under the sibling — cors disabled as configured.
+    expect(match("GET", "/app/open/x").routeRules.cors).toBeUndefined();
+  });
+
+  it("no encoding of a protected path ever weakens or drops its gate (over-decode invariant)", () => {
+    // The core safety property behind pessimistic decoding, stated adversarially:
+    // for ANY alternate reading of a genuinely-admin path, the resolved gate must
+    // be at least as strong as the raw reading — never the broad `guest` rule,
+    // never absent, never the sibling `off` reset. Encodes the fan-out an
+    // attacker controls (encoded separators/dots at any nesting, empty segments,
+    // no-op `..`) as an enumerated matrix so a regression in any single reading
+    // (canonical, merged, or the union direction) trips this.
+    const match = matcher({
+      "/app/**": { basicAuth: { username: "guest", password: "guest" } },
+      "/app/admin/**": {
+        basicAuth: { username: "admin", password: "s3cret", realm: "Admin" },
+      },
+      "/app/admin/off/**": { basicAuth: false },
+    });
+    // Every payload below is an encoding of the genuinely-admin `/app/admin/panel`
+    // — none resolves into the `off` subtree — so all must stay admin-gated.
+    for (const payload of [
+      "/app/admin/panel", // baseline
+      "/app/admin%2fpanel", // encoded separator
+      "/app/admin%252fpanel", // double-encoded separator
+      "/app/admin/pane%6c", // encoded non-separator byte (opaque)
+      "/app/admin/./panel", // no-op dot segment
+      "/app/admin//panel", // interior empty segment
+      "/app/admin/x/%2e%2e/panel", // encoded `..` that resolves back inside admin
+      "/app/%2e/admin/panel", // leading no-op dot
+      "/app/admin/off%2f..%2fpanel", // brushes `off` then climbs back out — still admin
+    ]) {
+      const { routeRules } = match("GET", payload);
+      expect(routeRules.basicAuth?.options, payload).toMatchObject({ username: "admin" });
+    }
+    // Control: a path that genuinely resolves into the `off` subtree is disabled,
+    // proving the matrix above passes because the paths stay admin — not because
+    // the reset is inert.
+    expect(match("GET", "/app/admin/off/x").routeRules.basicAuth).toBeUndefined();
+  });
+
   it("a broader canonical rule never DOWNGRADES a narrower rule the served path resolved", () => {
     // Encoded-dot escalation: a crafted `%2e%2e` path is served (raw) under a
     // strict narrow gate but canonicalizes *up* to a broad weak rule. The union
