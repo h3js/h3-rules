@@ -1,11 +1,22 @@
 import type { RouteRuleConfig } from "../src/types.ts";
 
+// A data-only rule carries arbitrary metadata under a custom key with no
+// registered handler — the consumer reads it off `event.context.routeRules`,
+// nothing runs. Custom keys are compile errors on the closed `RouteRuleConfig`
+// until augmented (README "Extending rule types"); this augmentation is exactly
+// what such a consumer writes, and lets the `dataOnly` spec below type-check.
+declare module "../src/types.ts" {
+  interface RouteRuleConfig {
+    meta?: Record<string, unknown>;
+  }
+}
+
 /**
- * Per-built-in-rule bench spec: a minimal rule set exercising exactly one
- * built-in rule handler, plus a hot probe that matches it. Shared by the RPS
- * bench (`bench/match.mjs`) and the bundle-size bench
- * (`bench/bundle-size.mjs`) so both report the same per-rule breakdown and the
- * two benches cannot drift on which rules exist.
+ * Per-rule bench spec: a minimal rule set exercising exactly one rule — a
+ * built-in handler, or the handler-less `dataOnly` floor — plus a hot probe
+ * that matches it. Shared by the RPS bench (`bench/match.mjs`) and the
+ * bundle-size bench (`bench/bundle-size.mjs`) so both report the same per-rule
+ * breakdown and the two benches cannot drift on which rules exist.
  *
  * Each set is a single pattern (chain-clean by construction — nothing to
  * pre-merge) and JSON-serializable (the bundle bench compiles + embeds it).
@@ -14,11 +25,16 @@ import type { RouteRuleConfig } from "../src/types.ts";
  * `cache`→ocache (via the opt-in `h3-rules/cache` handler; ocache is an
  * optional peer), `redirect`/`proxy`→ufo (proxy's handler is the opt-in
  * `h3-rules/proxy` subpath, which also pulls h3's `proxyRequest` — h3 is an
- * external peer either way), and `headers`/`cors`/`basicAuth` ship no extra
- * deps.
+ * external peer either way), and `headers`/`cors`/`basicAuth`/`dataOnly` ship
+ * no extra deps. `dataOnly` has no handler at all — its compiled bundle is the
+ * absolute floor (rules baked as JSON, no handler import, rou3 dropped).
  */
 export interface RuleBenchSpec {
-  /** Built-in rule name (matches the handler + its named export). */
+  /**
+   * Rule label + `.generated/` dir name. For built-ins this is the rule name
+   * (matches the handler + its named export); `dataOnly` labels the
+   * handler-less floor case (its custom key is `meta`).
+   */
   name: string;
   /** External runtime deps the handler pulls in (empty = h3 peer only). */
   deps: string[];
@@ -67,5 +83,14 @@ export const RULE_BENCHES: RuleBenchSpec[] = [
       "/admin/**": { basicAuth: { username: "admin", password: "secret", realm: "Admin" } },
     },
     probe: ["GET", "/admin/panel"],
+  },
+  {
+    // No handler: a custom `meta` key the matcher resolves as data only (read
+    // off `event.context.routeRules`, nothing runs). The compiled bundle floor
+    // — rules baked as JSON, no handler import, no rou3.
+    name: "dataOnly",
+    deps: [],
+    rules: { "/api/**": { meta: { tier: "premium" } } },
+    probe: ["GET", "/api/resource"],
   },
 ];
